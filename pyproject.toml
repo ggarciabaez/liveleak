@@ -5,7 +5,9 @@ requires-python = ">=3.12"
 dependencies = [
     "pytorch-geometric>=0.0.2",
     "scipy>=1.18.1",
+    "tensorrt>=11.2.1.2",
     "torch>=2.14.0",
     "torch-geometric>=2.8.0.post1",
     "torchvision>=0.29.0",
+    "ultralytics>=8.4.138",
 ]
