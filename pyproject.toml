@@ -1,0 +1,11 @@
+[project]
+name = "ppe"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "pytorch-geometric>=0.0.2",
+    "scipy>=1.18.1",
+    "torch>=2.14.0",
+    "torch-geometric>=2.8.0.post1",
+    "torchvision>=0.29.0",
+]
