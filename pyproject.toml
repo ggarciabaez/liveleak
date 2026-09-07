@@ -3,11 +3,16 @@ name = "ppe"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "filterpy>=1.4.5",
+    "ipykernel>=7.3.0",
+    "lap>=0.5.13",
     "pytorch-geometric>=0.0.2",
     "scipy>=1.18.1",
+    "supervision>=0.30.2",
     "tensorrt>=11.2.1.2",
     "torch>=2.14.0",
     "torch-geometric>=2.8.0.post1",
     "torchvision>=0.29.0",
+    "trackers>=2.6.0",
     "ultralytics>=8.4.138",
 ]

@@ -61,13 +61,16 @@ Node:
   type: onehot[person, machinery, vehicle, cone]
   velocity: [vx, vy]            (or speed, heading)
   ppe: onehot[hardhat, mask, vest] | NA   (person-only; NA for all other types)
+  position: [x, y]              (OPTIONAL on the node — see note)
 
 Edge (per frame):
-  (node_i, node_j, distance) for j in k-NN(i) or within distance_threshold
+  (node_i, node_j, dx, dy, distance) for j in k-NN(i) or within distance_threshold
 
 Temporal link:
   node id=k at frame t  ->  node id=k at frame t+1
 ```
+
+**Note on position (revised):** "how close are two nodes" should be carried as an **edge feature** (dx, dy, distance for every connected pair), not just used to decide which edges exist. That's the actual fix — closeness needs to be something the model can read a magnitude/direction from, not just a binary "there's an edge here." Edge-relative position also keeps the model translation-invariant: it reasons about relationships between entities, not where they happen to sit in a specific camera's frame, which matters if the model ever needs to generalize across sites or a repositioned camera. Absolute (x, y) as a *node* feature is only worth adding on top if the deployment camera is fixed and won't move between training and inference (true for most single-site safety cameras) — otherwise skip it and let exclusion-zone logic live in the rule-based fork, which can hard-code zone coordinates for a specific fixed camera without that assumption leaking into the learned model.
 
 Lock this down early — it's the contract the rule engine, the GNN, and eventually the fusion stage all depend on. Changing it later means retraining the GNN and rewriting the rule engine both.
 
@@ -130,3 +133,5 @@ Build the demo around *precursor detection*, not incident severity. Run the full
 **Demo**
 - [ ] Build visualization overlay (boxes, IDs, PPE status, fused score)
 - [ ] Script 2–3 staged non-compliance moments for the live demo
+
+*Deployment & rollout (CI/CD, Docker, cloud deploy, PR review) tracked separately — see `workplace-risk-detection-deployment.md`.*
