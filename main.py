@@ -25,10 +25,10 @@ from modules.rules import RuleEngine
 from modules.stgnn import STGNNForecaster
 from modules.kfilter import KalmanFilter
 from modules.visualizer import Visualizer
-"""
+
 
 def main():
-    """
+    
     # Initialize components
     detector = Detector()
     tracker = Tracker()

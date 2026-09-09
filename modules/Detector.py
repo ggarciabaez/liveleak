@@ -3,6 +3,7 @@ from trackers import ByteTrackTracker as Tracker
 import supervision as sv
 import cv2
 import numpy as np
+
 class Detector:
     def __init__(self, model: str, framerate=30, track_life = 30, **kwargs):
         self.model = YOLO(model, task='detect')
@@ -128,6 +129,9 @@ class Detector:
 
         # Convert lists to 2D numpy arrays, return empty 0x13 arrays if no objects found
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
+
+    def draw(self, frame, dets, vectors):
+        return frame
 
 if __name__ == "__main__":
     det = Detector("../assets/ppe_50ep.engine")
