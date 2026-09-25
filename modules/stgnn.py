@@ -1,3 +1,4 @@
+import numpy as np
 """
 The Spatio-Temporal Graph Neural Network Architecture
 This file is a commented outline only. It does not train a model or produce
@@ -41,3 +42,13 @@ Use held-out normal footage to map prediction errors to a 0-1 anomaly
 score. Send an available score to Kalman fusion alongside the separate
 rule score. Report no ST-GNN score until a forecast can be checked.
 """
+
+
+class MockSTGNN:
+    def __init__(self):
+        pass
+
+    def __call__(self, feature_buffer):
+        state = feature_buffer[-1, ..., 5:9]  # get the last frame's states
+        nv = np.random.normal(state[..., 2:], 0.1)  # add noise to velocities
+        return np.concatenate([state[..., :2] + nv, nv], axis=-1)  # return new states

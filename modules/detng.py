@@ -10,6 +10,9 @@ class DetNG:
             'px': 5, 'py': 6, 'vx': 7, 'vy': 8,
             'hh': 9, 'mask': 10, 'vest': 11
         }
+    @property
+    def num_rules(self):
+        return len(self.rules)
 
     def compile(self, rules_with_weights):
         """
