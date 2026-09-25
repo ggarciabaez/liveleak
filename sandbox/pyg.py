@@ -1,138 +1,183 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GATConv
-from collections import deque
+import numpy as np
+import scipy.stats as stats
+
+# Ensure reproducibility
+torch.manual_seed(42)
+np.random.seed(42)
 
 # ==========================================
-# 1. Architecture: PyG & Stateful Inference
+# 1. Info Vector Schema & Constants
 # ==========================================
-DIM_IN = 12  # [Type(4), Pos(2), Vel(2), PPE(4)]
-DIM_HIDDEN = 32
-DIM_OUT = 4  # Forecasted Pos(2) + Vel(2)
-T_WINDOW = 5  # Historical frames needed to forecast
+# Features: [Type(4), Pos(2), Vel(2), PPE(4)] = 12
+DIM_TYPE = 4
+DIM_POS = 2
+DIM_VEL = 2
+DIM_PPE = 4
+DIM_TOTAL = DIM_TYPE + DIM_POS + DIM_VEL + DIM_PPE
+
+T_WINDOW = 5  # T past frames
+N_NODES = 5  # Detections per frame
 
 
-class SpatialEncoder(nn.Module):
-    """Processes a single frame's sparse graph using Graph Attention."""
+# ==========================================
+# 2. Synthetic Data Generator
+# ==========================================
+def generate_synthetic_data(num_samples=200, T=T_WINDOW, N=N_NODES):
+    """Generates varied normal kinematics (smooth movement)."""
+    data = torch.zeros(num_samples, T + 1, N, DIM_TOTAL)
 
-    def __init__(self):
+    for b in range(num_samples):
+        # Assign Node Types: 0,1=Person, 2=Machinery, 3=Vehicle, 4=Cone
+        data[b, :, 0:2, 0] = 1.0  # Person
+        data[b, :, 2, 1] = 1.0  # Machinery
+        data[b, :, 3, 2] = 1.0  # Vehicle
+        data[b, :, 4, 3] = 1.0  # Cone
+
+        # Assign PPE: Persons compliant, others NA
+        data[b, :, 0:2, 8:11] = 1.0  # Hardhat, Mask, Vest
+        data[b, :, 0:2, 11] = 0.0  # NA = 0
+        data[b, :, 2:5, 8:11] = 0.0  # No PPE
+        data[b, :, 2:5, 11] = 1.0  # NA = 1
+
+        # Generate smooth kinematic trajectories
+        for n in range(N):
+            pos = torch.rand(2) * 10.0
+            vel = torch.randn(2) * 0.2
+
+            for t in range(T + 1):
+                data[b, t, n, 4:6] = pos
+                data[b, t, n, 6:8] = vel
+
+                # Step forward smoothly for the next frame
+                pos = pos + vel
+                vel = vel + torch.randn(2) * 0.05
+                vel = torch.clamp(vel, -1.0, 1.0)
+
+    return data
+
+
+# ==========================================
+# 3. ST-GNN Architecture
+# ==========================================
+class SpatialGraphConv(nn.Module):
+    """Simple spatial aggregation over threshold-distance graphs."""
+
+    def __init__(self, in_features, out_features):
         super().__init__()
-        # GATConv dynamically handles any number of nodes (N) and edges
-        self.gat = GATConv(DIM_IN, DIM_HIDDEN, heads=1, concat=False)
+        self.W_self = nn.Linear(in_features, out_features)
+        self.W_neigh = nn.Linear(in_features, out_features)
 
-    def forward(self, x, edge_index):
-        return F.relu(self.gat(x, edge_index))
+    def forward(self, x, adj):
+        self_out = self.W_self(x)
+        # Row-normalize adjacency
+        degree = adj.sum(dim=-1, keepdim=True).clamp(min=1.0)
+        adj_norm = adj / degree
+        neigh_out = self.W_neigh(torch.bmm(adj_norm, x))
+        return F.relu(self_out + neigh_out)
 
 
-class TemporalForecaster(nn.Module):
-    """Forecasts kinematics from a tracked sequence of spatial embeddings."""
-
-    def __init__(self):
+class ST_GNN(nn.Module):
+    def __init__(self, in_dim=DIM_TOTAL, hidden_dim=32, out_dim=4):
         super().__init__()
-        self.gru = nn.GRU(DIM_HIDDEN, DIM_HIDDEN, batch_first=True)
-        self.head = nn.Linear(DIM_HIDDEN, DIM_OUT)
+        self.dist_threshold = 3.0
+        self.spatial_conv = SpatialGraphConv(in_dim, hidden_dim)
+        # Temporal aggregator
+        self.gru = nn.GRU(input_size=hidden_dim, hidden_size=hidden_dim, batch_first=True)
+        # Forecasts next Pos(2) and Vel(2) = 4 dims
+        self.forecaster = nn.Linear(hidden_dim, out_dim)
 
-    def forward(self, track_sequences):
-        # track_sequences shape: (Num_Valid_Tracks, T_WINDOW, DIM_HIDDEN)
-        out, _ = self.gru(track_sequences)
-        last_hidden = out[:, -1, :]
-        return self.head(last_hidden)
+    def compute_adj(self, pos):
+        """Dynamic graph construction per frame based on proximity."""
+        diff = pos.unsqueeze(2) - pos.unsqueeze(1)
+        dist = diff.norm(dim=-1)
+        return (dist < self.dist_threshold).float()
 
+    def forward(self, x):
+        B, T, N, F = x.shape
+        spatial_seq = []
 
-class TrackStateBuffer:
-    """Maintains the temporal sequence for each active Tracker ID."""
+        # 1. Spatial pass per frame
+        for t in range(T):
+            x_t = x[:, t, :, :]
+            pos_t = x_t[:, :, 4:6]
+            adj_t = self.compute_adj(pos_t)
+            s_t = self.spatial_conv(x_t, adj_t)
+            spatial_seq.append(s_t)
 
-    def __init__(self, max_len=T_WINDOW):
-        self.max_len = max_len
-        self.buffer = {}  # track_id -> deque(spatial_embeddings)
+        spatial_seq = torch.stack(spatial_seq, dim=1)  # (B, T, N, H)
 
-    def update_and_fetch(self, active_ids, spatial_embeddings):
-        """
-        Appends new embeddings to active tracks.
-        Returns sequences only for tracks that have a full T_WINDOW of history.
-        """
-        ready_sequences = []
-        ready_ids = []
-        ready_indices = []  # Keeps track of which current-frame nodes are ready
+        # 2. Temporal pass per node
+        gru_in = spatial_seq.transpose(1, 2).reshape(B * N, T, -1)
+        gru_out, _ = self.gru(gru_in)
+        last_hidden = gru_out[:, -1, :]
 
-        for idx, track_id in enumerate(active_ids):
-            if track_id not in self.buffer:
-                self.buffer[track_id] = deque(maxlen=self.max_len)
+        # 3. Forecast step K=1
+        pred = self.forecaster(last_hidden)
+        return pred.reshape(B, N, -1)
 
-            # Append the detached embedding (no backprop through time across frames in inference)
-            self.buffer[track_id].append(spatial_embeddings[idx].detach())
-
-            # Only yield if the track has survived for the full window
-            if len(self.buffer[track_id]) == self.max_len:
-                seq = torch.stack(list(self.buffer[track_id]))
-                ready_sequences.append(seq)
-                ready_ids.append(track_id)
-                ready_indices.append(idx)
-
-        if ready_sequences:
-            return torch.stack(ready_sequences), ready_ids, ready_indices
-        return None, [], []
+    # ==========================================
 
 
+# 4. Training, Calibration, & Inference
 # ==========================================
-# 2. Graph Utility: Sparse Edge Index
-# ==========================================
-def build_edge_index(pos, threshold=3.0):
-    """Creates a sparse edge list [2, Num_Edges] for PyTorch Geometric."""
-    # Compute pairwise distances
-    dist = torch.cdist(pos, pos)
-    # Find all pairs within the distance threshold
-    edges = (dist < threshold).nonzero(as_tuple=False).t()
-    return edges
+print("Generating synthetic 'normal' training data...")
+train_data = generate_synthetic_data(num_samples=250)
+X_train = train_data[:, :T_WINDOW, :, :]  # Past T frames
+Y_train = train_data[:, T_WINDOW, :, 4:8]  # Target next frame (Pos, Vel)
+
+model = ST_GNN()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+criterion = nn.MSELoss()
+
+print("Training ST-GNN on self-supervised objective...")
+model.train()
+for epoch in range(100):
+    optimizer.zero_grad()
+    preds = model(X_train)
+    loss = criterion(preds, Y_train)
+    loss.backward()
+    optimizer.step()
+    if (epoch + 1) % 25 == 0:
+        print(f"Epoch {epoch + 1}/100 | Loss: {loss.item():.4f}")
+
+# --- Calibration ---
+print("\nCalibrating Risk distribution on held-out normal data...")
+model.eval()
+val_data = generate_synthetic_data(num_samples=50)
+with torch.no_grad():
+    val_preds = model(val_data[:, :T_WINDOW, :, :])
+    val_targets = val_data[:, T_WINDOW, :, 4:8]
+    # Get MSE per node per sample
+    node_mse = F.mse_loss(val_preds, val_targets, reduction='none').mean(dim=-1)
+
+mu_error = node_mse.mean().item()
+sigma_error = node_mse.std().item()
+print(f"Normal MSE -> Mean: {mu_error:.4f}, Std: {sigma_error:.4f}")
+
+# --- Anomaly Demo ---
+print("\nSimulating ST-GNN Anomaly (Node 0 abruptly accelerates towards Machinery)...")
+test_data = generate_synthetic_data(num_samples=1)
+# Inject anomaly on the target frame for Node 0
+test_data[0, T_WINDOW, 0, 6:8] = torch.tensor([8.0, -8.0])  # Massive unnatural velocity
+test_data[0, T_WINDOW, 0, 4:6] += test_data[0, T_WINDOW, 0, 6:8]
 
 
-# ==========================================
-# 3. Live Streaming Simulation
-# ==========================================
-print("Initializing Streaming ST-GNN Pipeline...\n")
-encoder = SpatialEncoder()
-forecaster = TemporalForecaster()
-state_buffer = TrackStateBuffer()
 
+with torch.no_grad():
+    test_X = test_data[:, :T_WINDOW, :, :]
+    test_Y = test_data[:, T_WINDOW, :, 4:8]
+    pred_Y = model(test_X)
+    test_mse = F.mse_loss(pred_Y, test_Y, reduction='none').mean(dim=-1).squeeze()
 
-# Simulate a video feed where the number of detections (N) changes
-def simulate_frame(frame_idx):
-    if frame_idx < 3:
-        N = 3
-        active_ids = [101, 102, 103]
-    elif frame_idx < 7:
-        N = 5
-        active_ids = [101, 102, 103, 104, 105]  # Two new workers enter
-    else:
-        N = 4
-        active_ids = [101, 103, 104, 105]  # Worker 102 leaves the frame
+    for i in range(N_NODES):
+        mse = test_mse[i].item()
+        # CDF mapping: How statistically unlikely is this error?
+        z_score = (mse - mu_error) / sigma_error
+        risk_prob = stats.norm.cdf(z_score)
 
-    # Generate dummy features and positions
-    x = torch.rand(N, DIM_IN)
-    pos = torch.rand(N, 2) * 10.0
-    x[:, 4:6] = pos
-    return N, active_ids, x, pos
-
-
-# Run the inference loop for 10 frames
-for t in range(10):
-    N_nodes, active_ids, x_t, pos_t = simulate_frame(t)
-
-    # 1. Build dynamic sparse graph for current frame
-    edge_index = build_edge_index(pos_t, threshold=4.0)
-
-    # 2. Encode spatial relationships (Handles variable N natively)
-    spatial_embeds = encoder(x_t, edge_index)
-
-    # 3. Update state buffer and fetch tracks with enough history
-    sequences, ready_ids, valid_indices = state_buffer.update_and_fetch(active_ids, spatial_embeds)
-
-    print(f"Frame {t} | Detections: {N_nodes} | Active IDs: {active_ids}")
-
-    # 4. Forecast risk if we have mature tracks
-    if sequences is not None:
-        preds = forecaster(sequences)
-        print(f"   -> Forecasted {len(ready_ids)} mature tracks: {ready_ids}")
-    else:
-        print("   -> Buffering history... waiting for mature tracks.")
+        status = "CRITICAL RISK" if risk_prob > 0.95 else "Normal"
+        label = "Person" if i < 2 else "Machinery/Veh/Cone"
+        print(f"Node {i} ({label[:8]}) | MSE: {mse:.4f} | Risk Score: {risk_prob:.3f} | {status}")
