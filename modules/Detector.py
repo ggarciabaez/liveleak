@@ -4,6 +4,39 @@ import supervision as sv
 import cv2
 import numpy as np
 
+
+def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
+    ppe_map = {}
+    if len(person_dets) == 0 or len(ppe_dets) == 0:
+        return ppe_map
+
+    ppe_cx = (ppe_dets.xyxy[:, 0] + ppe_dets.xyxy[:, 2]) / 2.0
+    ppe_cy = (ppe_dets.xyxy[:, 1] + ppe_dets.xyxy[:, 3]) / 2.0
+
+    for i in range(len(person_dets)):
+        t_id = person_dets.tracker_id[i]
+        if t_id is None:
+            continue
+
+        x1, y1, x2, y2 = person_dets.xyxy[i]
+
+        # Boolean mask of PPE centers that fall inside this person's bounding box
+        inside_x = (ppe_cx >= x1) & (ppe_cx <= x2)
+        inside_y = (ppe_cy >= y1) & (ppe_cy <= y2)
+        inside_mask = inside_x & inside_y
+
+        # Extract classes of the enclosed PPE
+        person_ppe_classes = ppe_dets.class_id[inside_mask]
+
+        # Map specific PPE classes (0: Hardhat, 1: Mask, 7: Vest)
+        hh = 1 if 0 in person_ppe_classes else 0
+        mask = 1 if 1 in person_ppe_classes else 0
+        vest = 1 if 7 in person_ppe_classes else 0
+
+        ppe_map[t_id] = [hh, mask, vest]
+
+    return ppe_map
+
 class Detector:
     def __init__(self, model: str, framerate=30, track_life = 30, **kwargs):
         self.model = YOLO(model, task='detect')
@@ -15,7 +48,7 @@ class Detector:
 
     def only_track(self, frame, ids=(), **kwargs):
         if not isinstance(frame, sv.Detections):
-            results = sv.Detections.from_ultralytics(self.model.predict(frame, verbose=False, **kwargs)[0])
+            results = self(frame, **kwargs)
         else:
             results = frame
         # TODO: add protections for empty results
@@ -38,49 +71,20 @@ class Detector:
         return {"ppe": ppe_dets, "person": person_dets, "cone": cone_dets,
                 "machinery": machinery_dets, "vehicle": vehicle_dets}
 
-    def match_ppe(self, person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
-        ppe_map = {}
-        if len(person_dets) == 0 or len(ppe_dets) == 0:
-            return ppe_map
-
-        ppe_cx = (ppe_dets.xyxy[:, 0] + ppe_dets.xyxy[:, 2]) / 2.0
-        ppe_cy = (ppe_dets.xyxy[:, 1] + ppe_dets.xyxy[:, 3]) / 2.0
-
-        for i in range(len(person_dets)):
-            t_id = person_dets.tracker_id[i]
-            if t_id is None:
-                continue
-
-            x1, y1, x2, y2 = person_dets.xyxy[i]
-
-            # Boolean mask of PPE centers that fall inside this person's bounding box
-            inside_x = (ppe_cx >= x1) & (ppe_cx <= x2)
-            inside_y = (ppe_cy >= y1) & (ppe_cy <= y2)
-            inside_mask = inside_x & inside_y
-
-            # Extract classes of the enclosed PPE
-            person_ppe_classes = ppe_dets.class_id[inside_mask]
-
-            # Map specific PPE classes (0: Hardhat, 1: Mask, 7: Vest)
-            hh = 1 if 0 in person_ppe_classes else 0
-            mask = 1 if 1 in person_ppe_classes else 0
-            vest = 1 if 7 in person_ppe_classes else 0
-
-            ppe_map[t_id] = [hh, mask, vest]
-
-        return ppe_map
-
-    def get_vectors(self, frame) -> list[np.ndarray]:
+    def get_vectors(self, frame, ud = None) -> list[np.ndarray]:
         """
         Orchestrates inference, tracking, separation, and vector formatting.
         Returns a list of 4 matrices [Persons, Machinery, Vehicles, Cones].
         Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
         """
-        td, ud = self.only_track(frame, ids=(5, 8, 9))
+        if ud is None:
+            td, ud = self.only_track(frame, ids=(5, 8, 9))
+        else:
+            td = frame
         moving = self.separate(td)
         static = self.separate(ud)
 
-        ppe_map = self.match_ppe(moving["person"], static["ppe"])
+        ppe_map = match_ppe(moving["person"], static["ppe"])
 
         final_vectors = [[], [], [], []]
         current_centroids = {}
