@@ -1,49 +1,59 @@
+"""
+This module currently provides a mock prediction interface for the fusion demo
+A trained ST-GNN should eventually replace the mock prediction
+"""
+
 import numpy as np
-"""
-The Spatio-Temporal Graph Neural Network Architecture
-This file is a commented outline only. It does not train a model or produce
-predictions yet. The shared node and edge schema must be agreed on before the
-interfaces below are implemented.
-"""
 
 
-"""Receive entity vectors
-Take the person, machinery, vehicle, and cone vectors produced by the
-detector. Each vector already contains an ID, type, position, velocity,
-and PPE information
-"""
+class MockSTGNN:
+    """
+    Predicts one-step-ahead kinematics for each entity.
 
+    Input feature vectors use the shared DetNG layout:
+    [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
 
-"""Build the graph for each frame
-Combine the entity vectors into a node-feature matrix, keeping IDs
-separately. Use node positions to find nearby pairs. For each connection,
-record the relative position (dx, dy) and distance between the two nodes.
-Share this graph with the rule and ST-GNN branches.
-"""
+    The feature history has shape (T, N, 13). Predictions have shape (N, 4) and contain [px, py, vx, vy]
+    """
 
-"""Collect a short history
-Use track IDs to connect the same entities across several frame graphs.
-Keep a sliding window and mark entities that enter, leave, or disappear.
-"""
+    def __init__(self, noise_std=0.1, seed=None):
+        self.noise_std = noise_std
+        self.rng = np.random.default_rng(seed)
 
-"""Forecast future motion
-Use the graph relationships and each entity's history to predict its
-position and velocity over the next few frames.
-"""
+    def __call__(self, feature_buffer):
+        """
+        Predict the next position and velocity from the latest frame
 
-"""Measure prediction error
-When the predicted frames arrive, compare each valid forecast with the
-observed position and velocity. A larger error indicates less typical
-motion; it does not by itself prove a safety risk.
-"""
+        :param feature_buffer: History of entity features with shape (T, N, 13)
+        :return: Predicted [px, py, vx, vy] values with shape (N, 4)
+        """
+        feature_buffer = np.asarray(feature_buffer)
 
-"""Calibrate and pass on the score
-Use held-out normal footage to map prediction errors to a 0-1 anomaly
-score. Send an available score to Kalman fusion alongside the separate
-rule score. Report no ST-GNN score until a forecast can be checked.
-"""
+        if feature_buffer.ndim != 3 or feature_buffer.shape[-1] != 13:
+            raise ValueError("feature_buffer must have shape (T, N, 13)")
 
+        # Read position and velocity from the latest frame.
+        last_state = feature_buffer[-1, :, 5:9]
+        position = last_state[:, :2]
+        velocity = last_state[:, 2:]
 
+        # Add noise to the current velocity as a stand-in for model prediction.
+        predicted_velocity = velocity + self.rng.normal(
+            0.0,
+            self.noise_std,
+            size=velocity.shape,
+        )
+
+        # Advance position by one time step using the predicted velocity.
+        predicted_position = position + predicted_velocity
+
+        # Return the same [px, py, vx, vy] layout expected by the demo.
+        return np.concatenate(
+            [predicted_position, predicted_velocity],
+            axis=-1,
+        )
+
+""" Legacy mock implementation for quick testing 
 class MockSTGNN:
     def __init__(self):
         pass
@@ -52,3 +62,4 @@ class MockSTGNN:
         state = feature_buffer[-1, ..., 5:9]  # get the last frame's states
         nv = np.random.normal(state[..., 2:], 0.1)  # add noise to velocities
         return np.concatenate([state[..., :2] + nv, nv], axis=-1)  # return new states
+"""
