@@ -2,7 +2,8 @@ import numpy as np
 from collections import deque
 from matplotlib import pyplot as plt
 from matplotlib.widgets import Slider
-from modules.stgnn import MockSTGNN
+from modules.stgnn import STGNN
+from torch import inference_mode
 from sandbox.detng import *
 from modules.kfilter import KalmanFilter
 
@@ -48,7 +49,8 @@ def application_loop(stgnn, detng, kf, T=5):
         # 1. Evaluate independent models
         gnn_score = detng.execute(actual_fvecs)[0]
 
-        stpred = stgnn(feature_buffer)
+        with inference_mode():
+            stpred = stgnn(feature_buffer).detach().numpy()  # Outputs [px, py, vx, vy] for t+2
         pstd, vstd = np.std(stpred, axis=0).reshape(2, 2)
         # Add a tiny epsilon to prevent division by zero
         det_score = 1 - np.exp(-(np.sum(vstd) / (np.sum(pstd) + 1e-6)))
@@ -126,7 +128,7 @@ def application_loop(stgnn, detng, kf, T=5):
 
 
 if __name__ == "__main__":
-    stgnn = MockSTGNN()
+    stgnn = STGNN(750)
     ng = DetNG().compile([
         (rule_ppe_compliance, 0.1),
         (rule_vectorized_proximity, 0.25),
