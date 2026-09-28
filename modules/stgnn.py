@@ -1,16 +1,47 @@
-"""
-Spatial-temporal model for one-step entity motion forecasting
+"""Spatial-temporal motion forecasting and anomaly-score calibration.
 
-Input:  (T, N, 13) feature history
-Output: (N, 4) predicted [px, py, vx, vy]
-
-This defines the model architecture. It needs training on tracked sequences before its predictions are useful
+The model predicts the next [px, py, vx, vy] for each tracked entity. Once
+the next frame is observed, forecast errors can be converted to 0–1 motion
+anomaly scores using a calibrator fitted on held-out normal footage.
 """
 
-
-# import numpy as np
+import numpy as np
 import torch
 import torch.nn as nn
+
+
+class MotionAnomalyCalibrator:
+    """Map forecast errors to empirical percentiles from normal footage."""
+
+    def __init__(self):
+        self.normal_errors = None
+
+    def fit(self, normal_errors):
+        """Fit on errors from normal sequences not used to train the model"""
+        
+        normal_errors = np.asarray(normal_errors, dtype=np.float64).reshape(-1)
+        
+        if normal_errors.size == 0:
+            raise ValueError("normal_errors must contain at least one value")
+        if not np.isfinite(normal_errors).all() or np.any(normal_errors < 0):
+            raise ValueError("normal_errors must be finite and non-negative")
+
+        self.normal_errors = np.sort(normal_errors)
+        return self
+
+    def score(self, forecast_errors):
+        """Return empirical anomaly percentiles in [0, 1]"""
+
+        if self.normal_errors is None:
+            raise RuntimeError("calibrator must be fitted before scoring")
+
+        forecast_errors = np.asarray(forecast_errors, dtype=np.float64)
+        if not np.isfinite(forecast_errors).all() or np.any(forecast_errors < 0):
+            raise ValueError("forecast_errors must be finite and non-negative")
+
+        ranks = np.searchsorted(self.normal_errors, forecast_errors, side="right")
+        return ranks / self.normal_errors.size
+
 
 class STGNN(nn.Module):
 
@@ -19,14 +50,14 @@ class STGNN(nn.Module):
 
         if graph_radius <= 0:
             raise ValueError("graph_radius must be positive")
+        if hidden_dim <= 0:
+            raise ValueError("hidden_dim must be positive")
 
-
-        # Positions are used to decide which entities are connected
-        # This value must use the same units as px and py in the input
+        # Positions determine which entities are connected in each frame
+        # graph_radius must use the same units as px and py in the input
         self.graph_radius = graph_radius
 
-        # Each entity has 13 values, but its ID is for tracking, not learning
-        # Encode the other 12 values into a learned hidden representation
+        # Exclude the ID from Learned feature and encode the other 12 values
         self.node_encoder = nn.Sequential(
             nn.Linear(12, hidden_dim),
             nn.ReLU(),
@@ -40,14 +71,14 @@ class STGNN(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        # Combine each entity's own representation with messages from neighbors
+        # Combine each entity's own representation with messages from its neighbors
         self.spatial_update = nn.GRUCell(hidden_dim, hidden_dim)
 
 
         # Read each entity's sequence of frame representations over time
         self.temporal_network = nn.GRU(
-            hidden_dim,
-            hidden_dim,
+            input_size=hidden_dim,
+            hidden_size=hidden_dim,
             batch_first=True,
         )
 
@@ -60,12 +91,10 @@ class STGNN(nn.Module):
 
 
     def _encode_frame(self, frame):
-        """Build one frame's spatial graph and encode its entities
+        """Build one frame's spatial graph and encode its entities"""
 
-        Feature layout: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
-        
-        Exclude id from the learned node features """
-        
+
+        # Feature layout: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
         node_features = frame[:, 1:]
         node_states = self.node_encoder(node_features)
 
@@ -79,11 +108,11 @@ class STGNN(nn.Module):
         distances = torch.linalg.vector_norm(relative_positions, dim=-1)
         edges = distances <= self.graph_radius
 
-        # An entity should not send a message to itself
+        # Remove self-connections --> entities should not send a message to themselves
         no_self_edges = ~torch.eye(
-            edges.size(0), 
+            frame.shape[0], 
             dtype=torch.bool, 
-            device=edges.device
+            device=frame.device
         )
         edges = edges & no_self_edges
         edge_weights = edges.to(node_states.dtype)
@@ -107,7 +136,7 @@ class STGNN(nn.Module):
             )
         )
 
-        #Ignore pairs that are outside the graph radius, then average neighbors
+        # Ignore pairs that are outside the graph radius, then average neighbors
         messages = messages * edge_weights.unsqueeze(-1)
         neighbor_count = edge_weights.sum(dim=1, keepdim=True).clamp_min(1)
         aggregated_messages = messages.sum(dim=1) / neighbor_count
@@ -116,7 +145,7 @@ class STGNN(nn.Module):
         return self.spatial_update(aggregated_messages, node_states)
 
     def forward(self, feature_history):
-        """Predict the next kinematics; used when training the model."""
+        """Predict the next kinematics as a Torch tensor"""
 
         # Accept either a NumPy array or a tensor and use the model's device
         model_device = next(self.parameters()).device
@@ -136,7 +165,6 @@ class STGNN(nn.Module):
             return feature_history.new_empty((0, 4))
 
         # This implementation expects row i to refer to the same track in every frame 
-        # Align or pad tracks by ID before passing the history in  
         track_ids = feature_history[:, :, 0]
         expected_ids = track_ids[0:1:, :].expand_as(track_ids)
         if not torch.equal(track_ids, expected_ids):
@@ -151,19 +179,19 @@ class STGNN(nn.Module):
         temporal_input = torch.stack(frame_embeddings, dim=1)
 
 
-        # GRU processes each entity's history across the T frames
+        # Process each entity's sequence across the T frames
         temporal_output, _ = self.temporal_network(temporal_input)
         latest_embedding = temporal_output[:, -1, :]
 
         # Predict a change, then add it to the latest observed state
         latest_kinematics = feature_history[-1, :, 5:9]
         predicted_change = self.motion_head(latest_embedding)
-
         return latest_kinematics + predicted_change
 
 
     def predict_kinematics(self, feature_history):
         """Return predictions as a NumPy array for the demo loops"""
+        
         was_training = self.training
         self.eval()
 
@@ -174,14 +202,48 @@ class STGNN(nn.Module):
         finally:
             self.train(was_training)
 
-    
-""" Legacy mock implementation for quick testing 
-class MockSTGNN:
-    def __init__(self):
-        pass
+    def score_forecast(self, feature_history, observed_next_frame, calibrator):
+        """Score checked forecasts after the next frame has been observed
 
-    def __call__(self, feature_buffer):
-        state = feature_buffer[-1, ..., 5:9]  # get the last frame's states
-        nv = np.random.normal(state[..., 2:], 0.1)  # add noise to velocities
-        return np.concatenate([state[..., :2] + nv, nv], axis=-1)  # return new states
-"""
+        `observed_next_frame` may have shape (N, 13), using the shared feature layout, or (N, 4), containing [px, py, vx, vy]. 
+        Rows must correspond to the same entities and ordering as the input history
+        The returned scene score is the maximum entity anomaly percentile
+        """
+        history = torch.as_tensor(feature_history).detach().cpu().numpy()
+        observed = torch.as_tensor(observed_next_frame).detach().cpu().numpy()
+
+        if history.ndim != 3 or history.shape[-1] != 13:
+            raise ValueError("feature_history must have shape (T, N, 13)")
+        if history.shape[0] == 0:
+            raise ValueError("feature_history must contain at least one frame")
+
+        entity_count = history.shape[1]
+        if observed.shape == (entity_count, 13):
+            if not np.array_equal(observed[:, 0], history[-1, :, 0]):
+                raise ValueError("observed entities must match history track IDs and row order")
+            observed_kinematics = observed[:, 5:9]
+        elif observed.shape == (entity_count, 4):
+            observed_kinematics = observed
+        else:
+            raise ValueError("observed_next_frame must have shape (N, 13) or (N, 4)")
+
+        if entity_count == 0:
+            return {
+                "scene_score": None,
+                "entity_scores": np.empty(0, dtype=np.float64),
+                "forecast_errors": np.empty(0, dtype=np.float64),
+                "entity_ids": history[-1, :, 0],
+            }
+
+        predicted_kinematics = self.predict_kinematics(history)
+        forecast_errors = np.sqrt(
+            np.mean(np.square(predicted_kinematics - observed_kinematics), axis=1)
+        )
+        entity_scores = calibrator.score(forecast_errors)
+
+        return {
+            "scene_score": float(np.max(entity_scores)),
+            "entity_scores": entity_scores,
+            "forecast_errors": forecast_errors,
+            "entity_ids": history[-1, :, 0],
+        }
