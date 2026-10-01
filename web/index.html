@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Construction Site Safety</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div>
+        <p class="eyebrow">LIVELEAK SAFETY</p>
+        <h1>Construction Site Safety</h1>
+      </div>
+      <div class="connection"><span id="status-dot"></span><span id="status-text">Connecting</span></div>
+    </header>
+
+    <nav class="tabs" aria-label="Monitoring pages">
+      <button class="tab active" data-panel="monitor">Live Monitor</button>
+      <button class="tab" data-panel="dashboard">Dashboard</button>
+    </nav>
+
+    <section id="monitor" class="panel active">
+      <div class="monitor-grid">
+        <article class="card camera-card">
+          <div class="card-heading">
+            <h2>Camera feed</h2>
+            <span id="fps">0 FPS</span>
+          </div>
+          <div class="camera-frame">
+            <img src="/api/camera/stream" alt="Live construction camera with detected objects">
+          </div>
+          <p id="camera-error" class="message"></p>
+        </article>
+
+        <aside class="card assessment-card">
+          <h2>Current assessment</h2>
+          <div class="metric">
+            <span>Fused risk score</span>
+            <strong id="risk-score">--</strong>
+            <small>Available after the rule and ST-GNN pipeline is connected.</small>
+          </div>
+          <div class="metric">
+            <span>Kalman covariance</span>
+            <strong id="covariance">--</strong>
+            <small>Estimate uncertainty from the fusion filter.</small>
+          </div>
+          <h3>Visible entities</h3>
+          <div class="entity-grid">
+            <div><strong id="persons">0</strong><span>People</span></div>
+            <div><strong id="machinery">0</strong><span>Machinery</span></div>
+            <div><strong id="vehicles">0</strong><span>Vehicles</span></div>
+            <div><strong id="cones">0</strong><span>Cones</span></div>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section id="dashboard" class="panel">
+      <article class="card">
+        <div class="card-heading">
+          <div>
+            <h2>Important events</h2>
+            <p>Only risk threshold crossings will appear here.</p>
+          </div>
+          <span class="badge">0 active alerts</span>
+        </div>
+        <div class="empty-state">
+          <strong>No important events in this session</strong>
+          <span>The detector is connected; event creation will begin when risk fusion is connected.</span>
+        </div>
+      </article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
