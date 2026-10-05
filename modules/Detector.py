@@ -3,7 +3,7 @@ from trackers import ByteTrackTracker as Tracker
 import supervision as sv
 import cv2
 import numpy as np
-
+# TODO: add a dict/list of labels in a commonly accessible place
 
 def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
     ppe_map = {}
@@ -135,30 +135,25 @@ class Detector:
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
     # TODO: @lewdys!!!!!
-    def draw(self, frame, dets, vectors):
+    def draw(self, frame, dets: sv.Detections, vectors):
+        for det in dets.xyxy:
+            d = det.astype(int).tolist()
+            frame = cv2.rectangle(frame, (d[0], d[1]), (d[2], d[3]), (0, 255, 0), 2)
         return frame
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # No se toca!!!
     np.set_printoptions(precision=2, suppress=True, linewidth=200)
-    if 1:
-        det = Detector("../assets/abombinmycar.pt")
-        v = cv2.VideoCapture(0)
-    
-        names = ["Personas", "Maquinaria", "Vehículos", "Conos"]
-        cols = ["id", "person", "machine", "vehicle", "cone",
-                "px", "py", "vx", "vy", "hh", "mask", "vest", "na"]
-    
-        for i in range(5):
-            ret, frame = v.read()
-            if not ret:
-                break
-            dets = det(frame)
-            vecs = det.get_vectors(dets)
-    
-            print(f"\n=== Frame {i} ===")
-            print("Columnas:", cols)
-            for name, m in zip(names, vecs):
-                print(f"{name} ({len(m)}):")
-                print(m if len(m) else "  (vacío)")
-    
-        v.release()
+    cam = cv2.VideoCapture(0)
+    det = Detector("../assets/ppe_50ep.engine")
+
+    while True:
+        ret, frame = cam.read()
+        if not ret:
+            break
+        dets = det(frame)
+        vecs = det.get_vectors(dets)
+        frame = det.draw(frame, dets, vecs)
+        cv2.imshow("frame", frame)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+    cam.release()
