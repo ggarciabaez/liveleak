@@ -138,13 +138,26 @@ class Detector:
         return frame
 
 if __name__ == "__main__":
-    det = Detector("../assets/abombinmycar.pt")
-    v = cv2.VideoCapture(0)
-
-    for i in range(5):
-        ret, frame = v.read()
-        if not ret:
-            break
-        dets = det(frame)
-        vecs = det.get_vectors(dets)
-        print([len(v) for v in vecs])
+    np.set_printoptions(precision=2, suppress=True, linewidth=200)
+    if 1:
+        det = Detector("../assets/abombinmycar.pt")
+        v = cv2.VideoCapture(0)
+    
+        names = ["Personas", "Maquinaria", "Vehículos", "Conos"]
+        cols = ["id", "person", "machine", "vehicle", "cone",
+                "px", "py", "vx", "vy", "hh", "mask", "vest", "na"]
+    
+        for i in range(5):
+            ret, frame = v.read()
+            if not ret:
+                break
+            dets = det(frame)
+            vecs = det.get_vectors(dets)
+    
+            print(f"\n=== Frame {i} ===")
+            print("Columnas:", cols)
+            for name, m in zip(names, vecs):
+                print(f"{name} ({len(m)}):")
+                print(m if len(m) else "  (vacío)")
+    
+        v.release()
