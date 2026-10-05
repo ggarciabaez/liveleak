@@ -44,7 +44,6 @@ class MotionAnomalyCalibrator:
 
 
 class STGNN(nn.Module):
-
     def __init__(self, graph_radius, hidden_dim=64):
         super().__init__()
 
@@ -57,23 +56,21 @@ class STGNN(nn.Module):
         # graph_radius must use the same units as px and py in the input
         self.graph_radius = graph_radius
 
-        # Exclude the ID from Learned feature and encode the other 12 values
+        # Exclude the ID and encode the other 12 features
         self.node_encoder = nn.Sequential(
             nn.Linear(12, hidden_dim),
             nn.ReLU(),
         )
 
-        # For every connected pair, create a message from:
-        # receiver representation, sender representation, relative position
+        # Encode receiver, sender, and relative position for each connection
         self.message_network = nn.Sequential(
             nn.Linear(hidden_dim * 2 + 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
         )
-        # Combine each entity's own representation with messages from its neighbors
+        # Combine each entity's representation with its neighbors' messages
         self.spatial_update = nn.GRUCell(hidden_dim, hidden_dim)
-
 
         # Read each entity's sequence of frame representations over time
         self.temporal_network = nn.GRU(
@@ -89,59 +86,38 @@ class STGNN(nn.Module):
             nn.Linear(hidden_dim, 4),
         )
 
-
     def _encode_frame(self, frame):
         """Build one frame's spatial graph and encode its entities"""
-
 
         # Feature layout: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
         node_features = frame[:, 1:]
         node_states = self.node_encoder(node_features)
 
-        # Create a pairwise position-difference matrix with shape (N, N, 2)
         positions = frame[:, 5:7]
+        edges = torch.cdist(positions, positions) <= self.graph_radius
+        edges.fill_diagonal_(False)
+        receiver_indices, sender_indices = edges.nonzero(as_tuple=True)
+
         relative_positions = (
-            positions[:, None, :] - positions[None, :, :]
+            positions[receiver_indices] - positions[sender_indices]
+        ) / self.graph_radius
+        message_features = torch.cat(
+            [
+                node_states[receiver_indices],
+                node_states[sender_indices],
+                relative_positions,
+            ],
+            dim=-1,
         )
-        
-        # Distances and connections have shape (N, N)
-        distances = torch.linalg.vector_norm(relative_positions, dim=-1)
-        edges = distances <= self.graph_radius
+        messages = self.message_network(message_features)
 
-        # Remove self-connections --> entities should not send a message to themselves
-        no_self_edges = ~torch.eye(
-            frame.shape[0], 
-            dtype=torch.bool, 
-            device=frame.device
-        )
-        edges = edges & no_self_edges
-        edge_weights = edges.to(node_states.dtype)
+        aggregated_messages = torch.zeros_like(node_states)
+        aggregated_messages.index_add_(0, receiver_indices, messages)
+        neighbor_count = torch.bincount(
+            receiver_indices, minlength=frame.shape[0]
+        ).clamp_min(1)
+        aggregated_messages = aggregated_messages / neighbor_count.unsqueeze(-1)
 
-        # Make all receiver/sender pairs so the message network can process them
-        entity_count = frame.shape[0]
-        receivers = node_states[:, None, :].expand(
-            entity_count, entity_count, -1
-        )
-        senders = node_states[None, :, :].expand(
-            entity_count, entity_count, -1
-        )
-
-        # Scale relative positions so their size is comparable across scenes
-        scaled_relative_positions = relative_positions / self.graph_radius    
-    
-        messages = self.message_network(
-            torch.cat(
-                [receivers, senders, scaled_relative_positions],
-                dim=-1,
-            )
-        )
-
-        # Ignore pairs that are outside the graph radius, then average neighbors
-        messages = messages * edge_weights.unsqueeze(-1)
-        neighbor_count = edge_weights.sum(dim=1, keepdim=True).clamp_min(1)
-        aggregated_messages = messages.sum(dim=1) / neighbor_count
-
-        # Return one spartially informed representation per entity: shape (N, H)
         return self.spatial_update(aggregated_messages, node_states)
 
     def forward(self, feature_history):
@@ -166,12 +142,11 @@ class STGNN(nn.Module):
 
         # This implementation expects row i to refer to the same track in every frame 
         track_ids = feature_history[:, :, 0]
-        expected_ids = track_ids[0:1:, :].expand_as(track_ids)
+        expected_ids = track_ids[:1].expand_as(track_ids)
         if not torch.equal(track_ids, expected_ids):
             raise ValueError("entities must be aligned by track ID across frames")
-        for frame_ids in track_ids:
-            if torch.unique(frame_ids).numel() != entity_count:
-                raise ValueError("track IDs must be unique within each frame")
+        if torch.unique(track_ids[0]).numel() != entity_count:
+            raise ValueError("track IDs must be unique within each frame")
 
         # Build one spatial graph representation for each frame
         # Each item has shape (N, H); stacking gives (N, T, H)
@@ -181,7 +156,6 @@ class STGNN(nn.Module):
         ]
         temporal_input = torch.stack(frame_embeddings, dim=1)
 
-
         # Process each entity's sequence across the T frames
         temporal_output, _ = self.temporal_network(temporal_input)
         latest_embedding = temporal_output[:, -1, :]
@@ -190,7 +164,6 @@ class STGNN(nn.Module):
         latest_kinematics = feature_history[-1, :, 5:9]
         predicted_change = self.motion_head(latest_embedding)
         return latest_kinematics + predicted_change
-
 
     def predict_kinematics(self, feature_history):
         """Return predictions as a NumPy array for the demo loops"""
@@ -252,108 +225,7 @@ class STGNN(nn.Module):
         }
 
 
-def _prepare_feature_sequences(feature_sequences, window_size, name):
-    if isinstance(feature_sequences, (np.ndarray, torch.Tensor)):
-        if feature_sequences.ndim == 3:
-            sequences = [feature_sequences]
-        elif feature_sequences.ndim == 4:
-            sequences = list(feature_sequences)
-        else:
-            raise ValueError(f"{name} must contain sequences shaped (F, N, 13)")
-    else:
-        sequences = list(feature_sequences)
-
-    if not sequences:
-        raise ValueError(f"{name} must contain at least one sequence")
-
-    prepared_sequences = []
-    for sequence_index, sequence in enumerate(sequences):
-        sequence = torch.as_tensor(sequence, dtype=torch.float32).detach().cpu()
-        if sequence.ndim != 3 or sequence.shape[-1] != 13:
-            raise ValueError(f"{name}[{sequence_index}] must have shape (F, N, 13)")
-        if sequence.shape[0] <= window_size:
-            raise ValueError(
-                f"{name}[{sequence_index}] needs more frames than window_size"
-            )
-        if sequence.shape[1] == 0:
-            raise ValueError(f"{name}[{sequence_index}] must contain entities")
-        if not torch.isfinite(sequence).all():
-            raise ValueError(f"{name}[{sequence_index}] must contain finite values")
-
-        track_ids = sequence[:, :, 0]
-        if not torch.equal(track_ids, track_ids[0:1, :].expand_as(track_ids)):
-            raise ValueError(
-                f"{name}[{sequence_index}] must keep each track in the same row"
-            )
-        if any(torch.unique(frame_ids).numel() != sequence.shape[1] for frame_ids in track_ids):
-            raise ValueError(
-                f"{name}[{sequence_index}] needs unique track IDs in every frame"
-            )
-        prepared_sequences.append(sequence)
-
-    return prepared_sequences
-
-
-def train_stgnn(
-    model,
-    training_sequences,
-    window_size=8,
-    epochs=20,
-    learning_rate=1e-3,
-    device=None,
-):
-    """Train one-step motion forecasts from tracked feature sequences.
-
-    Each sequence has shape (F, N, 13). Every sliding input window predicts
-    the following frame's [px, py, vx, vy] values using smooth L1 loss.
-    Returns the mean training loss for each epoch.
-    """
-    if window_size <= 0:
-        raise ValueError("window_size must be positive")
-    if epochs <= 0:
-        raise ValueError("epochs must be positive")
-    if learning_rate <= 0:
-        raise ValueError("learning_rate must be positive")
-
-    sequences = _prepare_feature_sequences(
-        training_sequences,
-        window_size,
-        "training_sequences",
-    )
-    training_windows = [
-        (sequence, start)
-        for sequence in sequences
-        for start in range(sequence.shape[0] - window_size)
-    ]
-
-    if device is not None:
-        model.to(device)
-    model_device = next(model.parameters()).device
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    epoch_losses = []
-
-    for _ in range(epochs):
-        model.train()
-        total_loss = 0.0
-        window_order = torch.randperm(len(training_windows)).tolist()
-
-        for window_index in window_order:
-            sequence, start = training_windows[window_index]
-            feature_history = sequence[start : start + window_size].to(model_device)
-            target = sequence[start + window_size, :, 5:9].to(model_device)
-
-            optimizer.zero_grad()
-            prediction = model(feature_history)
-            loss = nn.functional.smooth_l1_loss(prediction, target)
-            loss.backward()
-            optimizer.step()
-            total_loss += float(loss.detach().cpu())
-
-        epoch_losses.append(total_loss / len(training_windows))
-
-    return epoch_losses
-
-
+# TODO: it'd be sick af to turn this into a decorator, hella niche usage
 def fit_motion_anomaly_calibrator(
     model,
     normal_sequences,

@@ -134,6 +134,7 @@ class Detector:
         # Convert lists to 2D numpy arrays, return empty 0x13 arrays if no objects found
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
+    # TODO: @lewdys!!!!!
     def draw(self, frame, dets, vectors):
         return frame
 
