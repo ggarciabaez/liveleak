@@ -1,4 +1,4 @@
-from ultralytics import YOLO
+﻿from ultralytics import YOLO
 from trackers import ByteTrackTracker as Tracker
 import supervision as sv
 import cv2
@@ -138,8 +138,8 @@ class Detector:
         return frame
 
 if __name__ == "__main__":
-    det = Detector("../assets/ppe_50ep.engine")
-    v = cv2.VideoCapture("../assets/people-walking.mp4")
+    det = Detector("../assets/abombinmycar.pt")
+    v = cv2.VideoCapture(0)
 
     for i in range(5):
         ret, frame = v.read()
