@@ -5,6 +5,15 @@ import cv2
 import numpy as np
 # TODO: add a dict/list of labels in a commonly accessible place
 
+
+CLASSES = ('Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest', 'machinery', 'vehicle')
+PPE_IDS = (0, 1, 2, 3, 4, 7)
+ID_CONE = 6
+ID_PERSON = 5
+ID_MACHINERY = 8
+ID_VEHICLE = 9
+
+
 def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
     ppe_map = {}
     if len(person_dets) == 0 or len(ppe_dets) == 0:
@@ -89,10 +98,10 @@ class Detector:
         final_vectors = [[], [], [], []]
         current_centroids = {}
 
-        def process_subset(dets: sv.Detections, type_idx: int, type_onehot: list):
+        def process_subset(dets: sv.Detections, type_onehot: list):
             if len(dets) == 0:
                 return
-
+            type_idx = type_onehot.index(1)
             cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) / 2.0
             cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) / 2.0
 
@@ -124,6 +133,7 @@ class Detector:
                 final_vectors[type_idx].append(vec)
 
         # 0: Persons, 1: Machinery, 2: Vehicles, 3: Cones
+        # I don't like this redundancy but it really is optimal.
         process_subset(moving["person"], 0, [1, 0, 0, 0])
         process_subset(moving["machinery"], 1, [0, 1, 0, 0])
         process_subset(moving["vehicle"], 2, [0, 0, 1, 0])
