@@ -1,11 +1,22 @@
 from collections import deque
-from modules.stgnn import MockSTGNN
+from modules.stgnn import STGNN
+from torch import inference_mode
 from sandbox.chained_fusion import RuleScoreKalmanFilter
 from sandbox.detng import *
 from matplotlib import pyplot as plt
 from collections import deque
 
-def application_loop(stgnn: MockSTGNN, detng: DetNG, kf: RuleScoreKalmanFilter, T=5):
+class RollAVG:
+    def __init__(self):
+        self.x = 0
+        self.n = 0
+
+    def __call__(self, x):
+        self.x = (self.x * self.n + x) / (self.n + 1)
+        self.n += 1
+        return self.x
+
+def application_loop(stgnn: STGNN, detng: DetNG, kf: RuleScoreKalmanFilter, T=5):
     # History buffer of length T for the ST-GNN
     feature_buffer = np.empty((0, 10, 13))
     risk_hist = deque(maxlen=50)
@@ -54,7 +65,8 @@ def application_loop(stgnn: MockSTGNN, detng: DetNG, kf: RuleScoreKalmanFilter, 
         if len(feature_buffer) == T:
             # 4. PREDICT NEXT STATE KINEMATICS (ST-GNN)
             # ST-GNN looks at the historical buffer [t-T+1 ... t+1]
-            predicted_kinematics = stgnn(feature_buffer)  # Outputs [px, py, vx, vy] for t+2
+            with inference_mode():
+                predicted_kinematics = stgnn(feature_buffer).detach().numpy()  # Outputs [px, py, vx, vy] for t+2
 
             # 5. PREDICT NEXT STATE RISK (DetNG)
             # Create a synthetic feature vector for t+2
@@ -86,7 +98,7 @@ def application_loop(stgnn: MockSTGNN, detng: DetNG, kf: RuleScoreKalmanFilter, 
 
 
 if __name__ == "__main__":
-    stgnn = MockSTGNN()
+    stgnn = STGNN(750)
     ng = DetNG().compile([
         (rule_ppe_compliance, 0.1),
         (rule_vectorized_proximity, 0.25),

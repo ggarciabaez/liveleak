@@ -1,67 +1,22 @@
-from ultralytics import YOLO
+from modules.risk import RiskDetector
 import cv2
 
-cam = cv2.VideoCapture(0)
-model = YOLO("./assets/abombinmycar.engine")
-
-while True:
-    ret, frame = cam.read()
-    results = model(frame)
-    for result in results:
-        frame = result.plot(img=frame)
-    cv2.imshow("frame", frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
-
-
-
-"""
-# Import everything important
-from modules.Detector import Detector
-from modules.tracker import Tracker
-from modules.info_vector import InfoVectorBuilder
-from modules.rules import RuleEngine
-from modules.stgnn import STGNNForecaster
-from modules.kfilter import KalmanFilter
-from modules.visualizer import Visualizer
-"""
+# TODO: tune!
+WINSIZE=5
+STD_STGNN = 0.1
+STD_DETNG = 0.1
 
 def main():
-    """
-    # Initialize components
-    detector = Detector()
-    tracker = Tracker()
-    info_builder = InfoVectorBuilder()
-    rule_engine = RuleEngine()
-    # stgnn = ST-GNN model initialization
-    kalman = KalmanFilter()
-    visualizer = Visualizer()
-
-    # Video Input
     cam = cv2.VideoCapture(0)
-    
-    # Process every frame
+    model = RiskDetector("./assets/ppe_50ep.engine", "./assets/stgnn.pth",
+                         WINSIZE, STD_DETNG, STD_STGNN, graph_rad=250)
+    model.preload([cam.read()[1] for _ in range(WINSIZE)])
     while True:
         ret, frame = cam.read()
-       if not ret:
+        if not ret:
            break
-           
-    detections = detector.detect(frame)
-    tracks = tracker.update(detections)
-    nodes = info_builder.build(tracks)
+        score, frame = model(frame, draw=True)
+        cv2.imshow("ppe", frame)
+        if cv2.waitKey(1) == ord('q'):
+            break
 
-    # BRANCHES
-    rule_score = rule_engine.evaluate(nodes)
-    gnn_probability = stgnn.predict(nodes)
-
-        #Fuse both branches
-    risk_score = kalman.update(
-        rule_score,
-        gnn_probability
-    )
-
-    visualizer.draw(...)
-"""
-
-if __name__ == "__main__":
-    main()
