@@ -1,0 +1,9 @@
+Dataset: A Comprehensive Image and Video Dataset for Computer Vision-Based
+Construction Safety Management
+Version: 2
+Source: https://data.mendeley.com/datasets/xjm2czccx9/2
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License URL: https://creativecommons.org/licenses/by/4.0/
+
+This archive contains three sample video clips from the source dataset.
+The full source archive is not included in this repository.

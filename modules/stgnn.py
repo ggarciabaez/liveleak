@@ -225,7 +225,43 @@ class STGNN(nn.Module):
         }
 
 
-# TODO: it'd be sick af to turn this into a decorator, hella niche usage
+def _prepare_feature_sequences(feature_sequences, window_size, name):
+    """Validate and normalize input clips for training/calibration helpers."""
+    if isinstance(feature_sequences, (np.ndarray, torch.Tensor)):
+        if feature_sequences.ndim == 3:
+            sequences = [feature_sequences]
+        elif feature_sequences.ndim == 4:
+            sequences = list(feature_sequences)
+        else:
+            raise ValueError(f"{name} must contain sequences shaped (F, N, 13)")
+    else:
+        sequences = list(feature_sequences)
+
+    if not sequences:
+        raise ValueError(f"{name} must contain at least one sequence")
+
+    prepared = []
+    for sequence_index, sequence in enumerate(sequences):
+        sequence = torch.as_tensor(sequence, dtype=torch.float32).detach().cpu()
+        if sequence.ndim != 3 or sequence.shape[-1] != 13:
+            raise ValueError(f"{name}[{sequence_index}] must have shape (F, N, 13)")
+        if sequence.shape[0] <= window_size:
+            raise ValueError(f"{name}[{sequence_index}] needs more frames than window_size")
+        if sequence.shape[1] == 0:
+            raise ValueError(f"{name}[{sequence_index}] must contain entities")
+        if not torch.isfinite(sequence).all():
+            raise ValueError(f"{name}[{sequence_index}] must contain finite values")
+        track_ids = sequence[:, :, 0]
+        if not torch.equal(track_ids, track_ids[0:1, :].expand_as(track_ids)):
+            raise ValueError(f"{name}[{sequence_index}] must keep tracks in the same row")
+        if any(torch.unique(frame_ids).numel() != sequence.shape[1] for frame_ids in track_ids):
+            raise ValueError(f"{name}[{sequence_index}] needs unique track IDs per frame")
+        prepared.append(sequence)
+    return prepared
+
+
+# Keep calibration explicit: it requires held-out normal sequences and should
+# run after training, rather than being hidden inside a model decorator.
 def fit_motion_anomaly_calibrator(
     model,
     normal_sequences,
