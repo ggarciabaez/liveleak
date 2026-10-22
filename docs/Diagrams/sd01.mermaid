@@ -1,0 +1,54 @@
+sequenceDiagram
+    autonumber
+    actor M as Authorized Safety Manager
+    participant App as Application
+    participant MH as MonitoringHandler
+    participant AC as AccessControl
+    participant CW as CameraWorker
+    participant Det as Detector
+    participant RD as RiskDetector
+    participant DNG as DetNG
+    participant ST as STGNN
+    participant MAC as MotionAnomalyCalibrator
+    participant KF as KalmanFilter
+    participant MS as MonitorState
+    participant EH as EventHistoryStore
+
+    M->>App: Open live monitor
+    App->>MH: Request camera stream and status
+    MH->>AC: Check live-monitor permission
+    alt Authorized
+        MH->>CW: Subscribe to frames and status
+        loop For each processed camera frame
+            CW->>Det: Detect, track, and build feature vectors
+            Det-->>CW: Detections, track IDs, vectors
+            CW->>RD: Assess current vectors and history
+            par Deterministic assessment
+                RD->>DNG: Evaluate safety rules
+                DNG-->>RD: Rule score and violations
+            and Learned assessment
+                alt Aligned history and prior forecast available
+                    RD->>ST: Score prior forecast against current observations
+                    ST->>MAC: Calibrate forecast errors
+                    MAC-->>ST: Anomaly score
+                    ST-->>RD: Learned risk score
+                else Insufficient history or tracking
+                    Note over RD: Learned risk is unavailable, not zero
+                end
+            end
+            alt Learned score available
+                RD->>KF: Fuse learned score and rule score
+                KF-->>RD: Fused risk estimate
+            else Learned score unavailable
+                Note over RD: Define whether to show rule-only risk or no fused score
+            end
+            RD-->>CW: Scores, violations, and availability status
+            CW->>MS: Update latest frame, counts, and risk status
+            opt Assessment meets the agreed event-recording policy
+                CW->>EH: Append timestamped event
+            end
+            MH-->>App: Stream annotated frames and latest status
+        end
+    else Not authorized
+        MH-->>App: Access Denied
+    end

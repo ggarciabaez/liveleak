@@ -134,12 +134,29 @@ class Detector:
         # Convert lists to 2D numpy arrays, return empty 0x13 arrays if no objects found
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
-    # TODO: @lewdys!!!!!
-    def draw(self, frame, dets: sv.Detections, vectors):
-        for det in dets.xyxy:
-            d = det.astype(int).tolist()
-            frame = cv2.rectangle(frame, (d[0], d[1]), (d[2], d[3]), (0, 255, 0), 2)
+    # Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
+    def draw(self, frame, dets, vectors):
+        colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 0, 255), 3: (0, 255, 255)}
+        for idx, vector in enumerate(vectors):
+            for det in vector:
+                if det.size == 0:
+                    continue
+
+                cv2.circle(frame, (int(det[5]), int(det[6])), 5, colors[idx], -1)
+                cv2.putText(frame, str(det[0]), (int(det[5]), int(det[6])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                t = np.linalg.norm(det[7:9])/10.0
+                C = gyr_gradient(t)
+                cv2.arrowedLine(frame, (int(det[5]), int(det[6])), (int(det[5] + 10*det[7]), int(det[6] + 10*det[8])), C, 2)
         return frame
+
+
+
+
+
+
+
+
+        
 
 if __name__ == "__main__":  # No se toca!!!
     np.set_printoptions(precision=2, suppress=True, linewidth=200)

@@ -1,0 +1,28 @@
+stateDiagram-v2
+    state "YOLO26 + ByteTrack" as Detect
+    state "Feature Extractor" as Extract
+    state "N-Vector Queue" as Queue
+    state "STGNN + DetNG" as Score
+    state "Kalman Filter" as KF
+    state "Risk Warning" as Warn
+    state "Save to DB" as Save
+    state "Set Fault" as Fault
+
+    [*] --> Start
+    Start --> Preloading: Video feed found
+    Preloading --> Streaming: Model primed
+    Preloading --> Fault: Model failed
+    Streaming --> Detect: Frame ready
+    Streaming --> Fault: Feed unavailable
+    Detect --> Extract: Returned detections
+    Detect --> Fault: No detections
+    Extract --> Queue: Vector formation successful
+    Queue --> Score: Pass N vectors
+    Score --> KF: Risk scores
+    KF --> Warn: Risk above 0.9
+    KF --> Renderer: Risk at or below 0.9
+    Warn --> Save: Save enabled
+    Warn --> Renderer: Save disabled
+    Save --> Renderer
+    Save --> Fault: Save failed
+    Renderer --> Streaming
