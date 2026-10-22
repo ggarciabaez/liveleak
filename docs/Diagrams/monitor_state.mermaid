@@ -1,0 +1,16 @@
+stateDiagram-v2
+    [*] --> Stopped
+    Stopped --> Starting: Operator starts monitoring
+    Starting --> Monitoring: Camera opens and detector is ready
+    Starting --> Degraded: Camera opens but detector is unavailable
+    Starting --> Failed: Camera cannot open or OpenCV is unavailable
+    Monitoring --> Monitoring: Frame processed and published
+    Monitoring --> Degraded: Detector error, video continues
+    Monitoring --> Stopping: Operator stops monitoring
+    Monitoring --> Failed: Camera stops returning frames
+    Degraded --> Degraded: Raw frames continue streaming
+    Degraded --> Stopping: Operator stops monitoring
+    Degraded --> Failed: Camera stops returning frames
+    Stopping --> Stopped: Camera resource released
+    Stopped --> [*]: Application shuts down
+    Failed --> [*]
