@@ -1,7 +1,5 @@
 from modules.detng import *
 
-
-
 def test_performance(ng):
     from time import perf_counter
     data = gen_random_data(s=100, n=10, t=5)

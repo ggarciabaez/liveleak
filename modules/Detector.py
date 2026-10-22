@@ -98,12 +98,20 @@ class Detector:
         final_vectors = [[], [], [], []]
         current_centroids = {}
 
-        def process_subset(dets: sv.Detections, type_onehot: list):
+        def process_subset(dets: sv.Detections, type_idx: int):
             if len(dets) == 0:
                 return
-            type_idx = type_onehot.index(1)
-            cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) / 2.0
-            cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) / 2.0
+            type_onehot = [0, 0, 0, 0]
+            type_onehot[type_idx] = 1
+            states = np.array([t.state_estimator.get_state()["state"] for t in self.tracker.tracks])
+            if len(states) == 0:
+                return np.empty((4, 0, 13))
+            else:
+                states = states[..., 0]
+            xyxy = states[:, :4]
+            v = states[:, 4:]
+            cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
+            cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
 
             for i in range(len(dets)):
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
@@ -113,14 +121,14 @@ class Detector:
                     continue
 
                 icx, icy = cx[i], cy[i]
+                va, vb = v[i, :2], v[i, 2:]
                 vx, vy = 0.0, 0.0
 
                 if t_id != -1:
                     current_centroids[t_id] = (icx, icy)
                     # Pull previous coordinates if they exist
                     if t_id in self.track_dict:
-                        px, py = self.track_dict[t_id]
-                        vx, vy = icx - px, icy - py
+                        vx, vy = (va+vb)/2.0
 
                 # Default PPE state for non-persons
                 hh, mask, vest, na = 0, 0, 0, 1
@@ -134,10 +142,10 @@ class Detector:
 
         # 0: Persons, 1: Machinery, 2: Vehicles, 3: Cones
         # I don't like this redundancy but it really is optimal.
-        process_subset(moving["person"], 0, [1, 0, 0, 0])
-        process_subset(moving["machinery"], 1, [0, 1, 0, 0])
-        process_subset(moving["vehicle"], 2, [0, 0, 1, 0])
-        process_subset(static["cone"], 3, [0, 0, 0, 1])
+        process_subset(moving["person"], 0)
+        process_subset(moving["machinery"], 1)
+        process_subset(moving["vehicle"], 2)
+        process_subset(static["cone"], 3)
 
         self.track_dict = current_centroids
 
@@ -160,13 +168,21 @@ class Detector:
         return frame
 
 
+def gyr_gradient(t: float) -> tuple[int, int, int]:
+    # Enforce strict bounds between 0.0 and 1.0
+    t = max(0.0, min(1.0, t))
 
+    # Red rises quickly in the first half and stays fully saturated at 255
+    r = int(255 * min(1.0, t * 2.0))
 
+    # Green stays fully saturated at 255 and drops off in the second half
+    g = int(255 * min(1.0, (1.0 - t) * 2.0))
 
+    # Blue remains entirely absent throughout this gradient
+    b = 0
 
+    return b, g, r
 
-
-        
 
 if __name__ == "__main__":  # No se toca!!!
     np.set_printoptions(precision=2, suppress=True, linewidth=200)
