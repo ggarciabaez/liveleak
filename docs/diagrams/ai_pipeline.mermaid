@@ -1,0 +1,31 @@
+flowchart TD
+    Wait["Wait for Frame"]
+    YOLO[["YOLO26"]]
+    Det{"Detected objects?"}
+    BT[["ByteTrack Tracker"]]
+    FV(("Feature Vector Extraction"))
+    Q[("N-Vector Queue")]
+    Full{"Queue full?"}
+    ST["STGNN"]
+    DE["Deterministic Engine"]
+    KF[/"Kalman Filter"\]
+    Risk{"Risk > 0.9?"}
+    Warn["WARNING"]
+    Log(("Log"))
+
+    Wait -->|"Incoming Frame"| YOLO
+    YOLO --> Det
+    Det -->|"No"| Wait
+    Det -->|"Yes"| BT
+    BT --> FV
+    FV --> Q
+    Q --> Full
+    Full -->|"No"| Wait
+    Full -->|"Yes"| ST
+    Full -->|"Yes"| DE
+    ST --> KF
+    DE --> KF
+    KF -->|"Risk Score"| Risk
+    KF -->|"Covariance"| Log
+    Risk -->|"Yes"| Warn
+    Risk -->|"No"| Wait

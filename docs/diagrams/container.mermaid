@@ -1,0 +1,39 @@
+flowchart TD
+    subgraph SITE["Camera / video source"]
+        CAM["CameraServe: OpenCV capture"]
+    end
+
+    subgraph SRV["Monitoring Service (one container on the GPU host)"]
+        API["WebSocket API: MonitoringHandler"]
+        AC["AccessControl"]
+        CW["CameraWorker: latest-frame buffer"]
+        YOLO["YOLO26 + ByteTrack"]
+        DES[/"Deterministic Expert System: DetNG"\]
+        STGNN[/"ST-GNN"\]
+        KF{{"Kalman Filter"}}
+        STATE["MonitorState"]
+        REP["Report Service"]
+        EH["EventHistoryStore: single writer"]
+
+    end
+
+    subgraph WS["Workstation"]
+        APP["Desktop Application: live view and dashboard"]
+      DB[("SQLite risk.db, WAL mode")]
+    end
+
+    CAM -->|"TCP video stream"| CW
+    CW -->|"latest frame"| YOLO
+    YOLO --> DES
+    YOLO --> STGNN
+    DES -->|"rule risk"| KF
+    STGNN -->|"learned risk"| KF
+    KF -->|"risk score, covariance"| CW
+    CW --> STATE
+    CW -->|"estimates, events"| EH
+    EH --> DB
+    REP -->|"read-only queries"| EH
+    APP <-->|"WSOCK: JSON and MJPEG"| API
+    API --> AC
+    API --> STATE
+    API --> REP

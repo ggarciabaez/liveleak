@@ -1,0 +1,61 @@
+classDiagram
+    direction TB
+
+    class Application {
+        +riskclient: MonitoringClient
+        +camsrc: CameraServe
+        +renderer: Renderer
+        +dashboard: Dashboard
+        +start() None
+        +stop() None
+        +open_live_monitor() None
+        +open_weekly_report(project_id, start, end) None
+    }
+
+    class CameraServe {
+        +camsrc: cv2.VideoCapture
+        +client_handle: Socket
+        +start() None
+        +attach_cam(src) bool
+    }
+
+    class MonitoringClient {
+        +base_url: str
+        +token: str
+        +sign_in(user, password) bool
+        +sign_out() None
+        +open_stream() Iterator~Frame~
+        +get_status() dict
+        +get_report(project_id, start, end) ReportData
+    }
+
+    class Renderer {
+        +draw_frame(frame, status) None
+        +show_risk(assessment) None
+        +show_banner(message) None
+    }
+
+    class Dashboard {
+        +show_report(data) None
+        +show_denied() None
+        -draw_histogram(buckets) None
+        -fill_incident_list(incidents) None
+    }
+
+    class MonitoringHandler {
+        <<server package>>
+    }
+    class CameraWorker {
+        <<server package>>
+    }
+    class ReportData {
+        <<server package>>
+    }
+
+    Application --> CameraServe
+    Application --> MonitoringClient
+    Application --> Renderer
+    Application --> Dashboard
+    MonitoringClient ..> MonitoringHandler : WSOCK (JSON, MJPEG)
+    CameraServe ..> CameraWorker : video stream (WebSocket)
+    Dashboard ..> ReportData : renders

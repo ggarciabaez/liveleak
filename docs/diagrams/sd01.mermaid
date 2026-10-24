@@ -11,8 +11,6 @@ sequenceDiagram
     participant ST as STGNN
     participant MAC as MotionAnomalyCalibrator
     participant KF as KalmanFilter
-    participant MS as MonitorState
-    participant EH as EventHistoryStore
 
     M->>App: Open live monitor
     App->>MH: Request camera stream and status
@@ -43,10 +41,6 @@ sequenceDiagram
                 Note over RD: Define whether to show rule-only risk or no fused score
             end
             RD-->>CW: Scores, violations, and availability status
-            CW->>MS: Update latest frame, counts, and risk status
-            opt Assessment meets the agreed event-recording policy
-                CW->>EH: Append timestamped event
-            end
             MH-->>App: Stream annotated frames and latest status
         end
     else Not authorized
