@@ -2,25 +2,13 @@
 
 The model predicts the next [px, py, vx, vy] for each tracked entity. Once
 the next frame is observed, forecast errors can be converted to 0–1 motion
-anomaly scores using a calibrator fitted on held-out normal footage
-"""
-
-import numpy as np
-import torch
-import torch.nn as nn
-
-
-"""Spatial-temporal motion forecasting and anomaly-score calibration.
-
-The model predicts the next [px, py, vx, vy] for each tracked entity. Once
-the next frame is observed, forecast errors can be converted to 0–1 motion
 anomaly scores using a calibrator fitted on held-out normal footage.
 """
 
 import numpy as np
 import torch
 import torch.nn as nn
-
+print("Working on the right one ffs")
 
 class MotionAnomalyCalibrator:
     """Maps forecast RMSE values to empirical percentiles [0, 1] from normal footage."""
@@ -64,7 +52,7 @@ class STGNN(nn.Module):
     FEAT_SLICE = slice(1, 13)   # 12 features (excluding track ID at col 0)
     POS_SLICE = slice(5, 7)     # [px, py]
     KIN_SLICE = slice(5, 9)     # [px, py, vx, vy]
-
+    CONE_COL = 4
     def __init__(self, graph_radius: float, hidden_dim: int = 64):
         super().__init__()
         if graph_radius <= 0 or hidden_dim <= 0:
@@ -141,32 +129,64 @@ class STGNN(nn.Module):
         out_states[valid_idx] = self.spatial_update(aggregated, node_states)
         return out_states
 
-    def forward(self, features, mask=None) -> torch.Tensor:
-        """
-        Given a sequence of frames (T, N, 13) and presence mask (T, N),
-        predicts the next step's kinematics (N, 4) from the final frame T-1.
+    def _prepare(self, features, mask):
+        """Coerce and validate (T, N, 13) features and the (T, N) presence mask.
+
+        Returns (feats, valid, active). `valid` is presence (mask, or inferred from
+        padding id -1); `active` is valid AND not a cone, i.e. the entities that
+        take part in the graph and the temporal state.
         """
         device = next(self.parameters()).device
         feats = torch.as_tensor(features, dtype=torch.float32, device=device).contiguous()
 
         if feats.ndim != 3 or feats.shape[-1] != 13:
-            raise ValueError(f"Expected features of shape (T, N, 13), got {feats.shape}")
+            raise ValueError(f"Expected features of shape (T, N, 13), got {tuple(feats.shape)}")
 
+        T, N, _ = feats.shape
+        if T == 0:
+            raise ValueError("features must contain at least one frame")
+
+        if mask is None:
+            # Infer presence from padding (padded slots have ID == -1)
+            valid = feats[:, :, 0] != -1
+        else:
+            valid = torch.as_tensor(mask, dtype=torch.bool, device=device).contiguous()
+            if valid.shape != (T, N):
+                raise ValueError(f"mask must have shape (T, N) = {(T, N)}, got {tuple(valid.shape)}")
+        # A slot must hold one track ID in every frame where it is present,
+        # and no two slots may share an ID
+        if N > 0:
+            ids = feats[:, :, 0]
+            hi = ids.masked_fill(~valid, float("-inf")).amax(dim=0)
+            lo = ids.masked_fill(~valid, float("inf")).amin(dim=0)
+            seen = valid.any(dim=0)
+            if not torch.equal(hi[seen], lo[seen]):
+                raise ValueError("entities must be aligned by track ID across frames")
+            if torch.unique(hi[seen]).numel() != int(seen.sum()):
+                raise ValueError("track IDs must be unique across slots")
+
+        # Only moving entities participate; cones are static context for DetNG
+        active = valid & ~(feats[:, :, self.CONE_COL] > 0.5)
+        return feats, valid, active
+
+
+    def forward(self, features, mask=None):
+        """
+        Given a sequence of frames (T, N, 13) and presence mask (T, N),
+        predicts the next step's kinematics (N, 4) from the final frame T-1.
+        Cones are ignored. Rows of slots that are absent at T-1 (or are cones)
+        are meaningless: select with `mask[-1]` and the type column.
+        """
+        feats, _, active = self._prepare(features, mask)
         T, N, _ = feats.shape
         if N == 0:
             return feats.new_empty((0, 4))
 
-        if mask is None:
-            # Infer mask from unpadded track IDs (padded slots have ID == -1)
-            valid_mask = feats[:, :, 0] != -1
-        else:
-            valid_mask = torch.as_tensor(mask, dtype=torch.bool, device=device).contiguous()
-
         # Step through time: only update an entity's temporal GRU state on frames where it is visible
-        h_temporal = torch.zeros((N, self.hidden_dim), dtype=feats.dtype, device=device)
+        h_temporal = torch.zeros((N, self.hidden_dim), dtype=feats.dtype, device=feats.device)
         for t in range(T):
-            spatial_emb = self._encode_frame(feats[t], valid_mask[t])
-            present = valid_mask[t]
+            spatial_emb = self._encode_frame(feats[t], active[t])
+            present = active[t]
             if present.any():
                 h_temporal[present] = self.temporal_cell(spatial_emb[present], h_temporal[present])
 
@@ -179,24 +199,21 @@ class STGNN(nn.Module):
         Uses frames [0 ... T-2] to predict kinematics at frame T-1, and returns
         the per-entity RMSE for entities visible in both T-2 and T-1.
         """
-        device = next(self.parameters()).device
-        feats = torch.as_tensor(features, dtype=torch.float32, device=device).contiguous()
-        valid_mask = torch.as_tensor(mask, dtype=torch.bool, device=device).contiguous()
-
+        feats, _, active = self._prepare(features, mask)
         T, N, _ = feats.shape
+        empty = feats.new_empty((0,))
         if T < 2 or N == 0:
-            return torch.zeros(1, dtype=torch.float32, device=device)
+            return empty
 
         # Only evaluate entities present in the last history frame (T-2) AND target frame (T-1)
-        eval_entities = valid_mask[-2] & valid_mask[-1]
+        eval_entities = active[-2] & active[-1]
         if not eval_entities.any():
-            return torch.zeros(1, dtype=torch.float32, device=device)
+            return empty
 
-        pred_kin = self.forward(feats[:-1], valid_mask[:-1])
+        pred_kin = self.forward(feats[:-1], active[:-1])
         obs_kin = feats[-1, :, self.KIN_SLICE]
 
-        errors = torch.sqrt(torch.mean((pred_kin[eval_entities] - obs_kin[eval_entities]) ** 2, dim=-1))
-        return errors
+        return torch.sqrt(torch.mean((pred_kin[eval_entities] - obs_kin[eval_entities]) ** 2, dim=-1))
 
     def save_weights(self, path):
         torch.save(self.state_dict(), path)
