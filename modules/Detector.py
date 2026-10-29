@@ -3,7 +3,6 @@ from trackers import ByteTrackTracker as Tracker
 import supervision as sv
 import cv2
 import numpy as np
-# TODO: add a dict/list of labels in a commonly accessible place
 
 
 CLASSES = ('Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest', 'machinery', 'vehicle')

@@ -14,7 +14,17 @@ class RiskDetector:
         # The pipeline. quite simple, really.
         self.detector = Detector(yolo_path)
         self.detng = DetNG().compile(get_rules() if ruleset is None else ruleset)
-        self.model = STGNN(graph_rad).load_state_dict(tload(stgnn_path))
+        checkpoint = tload(stgnn_path, map_location="cpu")
+        model_config = checkpoint.get("model_config", {})
+        self.model = STGNN(
+            model_config.get("graph_radius", graph_rad),
+            hidden_dim=model_config.get("hidden_dim", 64),
+        )
+        state_dict = checkpoint.get(
+            "model_state_dict", checkpoint.get("model", checkpoint)
+        )
+        self.model.load_state_dict(state_dict)
+        self.model.eval()
         self.kf = KalmanFilter()
         self.results = {}
 
