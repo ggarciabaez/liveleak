@@ -1,0 +1,26 @@
+sequenceDiagram
+    autonumber
+    actor M as Authorized Safety Manager
+    participant App as Application
+    participant MH as MonitoringHandler
+    participant CW as CameraWorker
+    participant Det as Detector
+
+    M->>App: Open live monitor
+    App->>MH: Request camera stream and status
+    loop For each camera frame
+        CW->>Det: Detect, track, and build feature vectors
+        alt Detector returns normally
+            Det-->>CW: Detections, track IDs, vectors
+            MH-->>App: Stream annotated frame and status
+        else Detector error, camera still delivering frames
+            Det--xCW: Error
+            Note over CW: Set internal state to Degraded, risk unavailable
+            MH-->>App: Stream raw frame with degraded-mode status
+            App-->>M: Show "risk analysis unavailable" banner
+        else Camera stops returning frames
+            Note over CW: Set internal state to Failed
+            MH-->>App: Monitoring failed
+            App-->>M: Show camera-failure message
+        end
+    end

@@ -1,0 +1,63 @@
+classDiagram
+    direction LR
+
+    class EventHistoryStore {
+        -db_path: Path
+        -write_queue: Queue
+        -writer: Thread
+        +open_session(user_id, project_id) str
+        +record_estimate(session_id, ts, assessment) None
+        +record_event(session_id, ts, peak_score, kind) None
+        +events_between(project_id, start, end) list~Event~
+        +close() None
+    }
+    note for EventHistoryStore "Only the writer thread holds a write connection. Reads use read-only connections."
+
+    class Event {
+        +event_id: str
+        +session_id: str
+        +timestamp: datetime
+        +peak_score: float
+        +kind: str
+    }
+
+    class WeeklyReportService {
+        +store: EventHistoryStore
+        +aggregator: ReportAggregator
+        +generate(project_id, start, end) ReportData
+    }
+
+    class ReportAggregator {
+        +build(events, start, end) ReportData
+        -bucket_by_day(events, start, end) list~DayBucket~
+    }
+
+    class ReportData {
+        +incidents: list~Event~
+        +histogram: list~DayBucket~
+    }
+
+    class DayBucket {
+        +day: date
+        +count: int
+    }
+
+    class MonitoringHandler {
+        <<server package>>
+    }
+    class CameraWorker {
+        <<server package>>
+    }
+    class RiskAssessment {
+        <<server package>>
+    }
+
+    WeeklyReportService --> EventHistoryStore : read-only queries
+    WeeklyReportService *-- ReportAggregator
+    ReportAggregator ..> ReportData : builds
+    ReportData *-- DayBucket
+    ReportData o-- Event
+    EventHistoryStore ..> Event : returns
+    EventHistoryStore ..> RiskAssessment : stores
+    MonitoringHandler ..> WeeklyReportService : generate
+    CameraWorker ..> EventHistoryStore : enqueues records

@@ -1,0 +1,30 @@
+sequenceDiagram
+    autonumber
+    actor SM as Site Safety Manager
+    participant D as Dashboard
+    participant MH as MonitoringHandler
+    participant AC as AccessControl
+    participant WRS as WeeklyReportService
+    participant EH as EventHistoryStore
+    participant RA as ReportAggregator
+
+    SM->>D: Request report for project and last 7 days
+    D->>MH: GET /api/reports with project and date range
+    MH->>AC: Check report-view permission
+    alt Authorized
+        MH->>WRS: Generate project report
+        WRS->>EH: Load recorded events for date range
+        EH-->>WRS: Matching event records
+        alt Events exist
+            WRS->>RA: Build incident list and daily histogram
+            RA-->>WRS: Report data
+            WRS-->>MH: Incident rows and histogram buckets
+        else No events
+            WRS-->>MH: Empty incident list and zero-count buckets
+        end
+        MH-->>D: Return report data
+        D-->>SM: Display interactive list and histogram
+    else Not authorized
+        MH-->>D: 403 Forbidden
+        D-->>SM: Show access-denied message
+    end

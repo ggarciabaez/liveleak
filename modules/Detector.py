@@ -5,6 +5,15 @@ import cv2
 import numpy as np
 # TODO: add a dict/list of labels in a commonly accessible place
 
+
+CLASSES = ('Hardhat', 'Mask', 'NO-Hardhat', 'NO-Mask', 'NO-Safety Vest', 'Person', 'Safety Cone', 'Safety Vest', 'machinery', 'vehicle')
+PPE_IDS = (0, 1, 2, 3, 4, 7)
+ID_CONE = 6
+ID_PERSON = 5
+ID_MACHINERY = 8
+ID_VEHICLE = 9
+
+
 def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
     ppe_map = {}
     if len(person_dets) == 0 or len(ppe_dets) == 0:
@@ -89,12 +98,20 @@ class Detector:
         final_vectors = [[], [], [], []]
         current_centroids = {}
 
-        def process_subset(dets: sv.Detections, type_idx: int, type_onehot: list):
+        def process_subset(dets: sv.Detections, type_idx: int):
             if len(dets) == 0:
                 return
-
-            cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) / 2.0
-            cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) / 2.0
+            type_onehot = [0, 0, 0, 0]
+            type_onehot[type_idx] = 1
+            states = np.array([t.state_estimator.get_state()["state"] for t in self.tracker.tracks])
+            if len(states) == 0:
+                return np.empty((4, 0, 13))
+            else:
+                states = states[..., 0]
+            xyxy = states[:, :4]
+            v = states[:, 4:]
+            cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
+            cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
 
             for i in range(len(dets)):
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
@@ -104,14 +121,14 @@ class Detector:
                     continue
 
                 icx, icy = cx[i], cy[i]
+                va, vb = v[i, :2], v[i, 2:]
                 vx, vy = 0.0, 0.0
 
                 if t_id != -1:
                     current_centroids[t_id] = (icx, icy)
                     # Pull previous coordinates if they exist
                     if t_id in self.track_dict:
-                        px, py = self.track_dict[t_id]
-                        vx, vy = icx - px, icy - py
+                        vx, vy = (va+vb)/2.0
 
                 # Default PPE state for non-persons
                 hh, mask, vest, na = 0, 0, 0, 1
@@ -124,22 +141,48 @@ class Detector:
                 final_vectors[type_idx].append(vec)
 
         # 0: Persons, 1: Machinery, 2: Vehicles, 3: Cones
-        process_subset(moving["person"], 0, [1, 0, 0, 0])
-        process_subset(moving["machinery"], 1, [0, 1, 0, 0])
-        process_subset(moving["vehicle"], 2, [0, 0, 1, 0])
-        process_subset(static["cone"], 3, [0, 0, 0, 1])
+        # I don't like this redundancy but it really is optimal.
+        process_subset(moving["person"], 0)
+        process_subset(moving["machinery"], 1)
+        process_subset(moving["vehicle"], 2)
+        process_subset(static["cone"], 3)
 
         self.track_dict = current_centroids
 
         # Convert lists to 2D numpy arrays, return empty 0x13 arrays if no objects found
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
-    # TODO: @lewdys!!!!!
-    def draw(self, frame, dets: sv.Detections, vectors):
-        for det in dets.xyxy:
-            d = det.astype(int).tolist()
-            frame = cv2.rectangle(frame, (d[0], d[1]), (d[2], d[3]), (0, 255, 0), 2)
+    # Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
+    def draw(self, frame, dets, vectors):
+        colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 0, 255), 3: (0, 255, 255)}
+        for idx, vector in enumerate(vectors):
+            for det in vector:
+                if det.size == 0:
+                    continue
+
+                cv2.circle(frame, (int(det[5]), int(det[6])), 5, colors[idx], -1)
+                cv2.putText(frame, str(det[0]), (int(det[5]), int(det[6])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                t = np.linalg.norm(det[7:9])/10.0
+                C = gyr_gradient(t)
+                cv2.arrowedLine(frame, (int(det[5]), int(det[6])), (int(det[5] + 10*det[7]), int(det[6] + 10*det[8])), C, 2)
         return frame
+
+
+def gyr_gradient(t: float) -> tuple[int, int, int]:
+    # Enforce strict bounds between 0.0 and 1.0
+    t = max(0.0, min(1.0, t))
+
+    # Red rises quickly in the first half and stays fully saturated at 255
+    r = int(255 * min(1.0, t * 2.0))
+
+    # Green stays fully saturated at 255 and drops off in the second half
+    g = int(255 * min(1.0, (1.0 - t) * 2.0))
+
+    # Blue remains entirely absent throughout this gradient
+    b = 0
+
+    return b, g, r
+
 
 if __name__ == "__main__":  # No se toca!!!
     np.set_printoptions(precision=2, suppress=True, linewidth=200)

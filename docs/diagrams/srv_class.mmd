@@ -1,0 +1,173 @@
+classDiagram
+    direction TB
+
+    class BaseRequestHandler {
+        <<stdlib>>
+    }
+
+    class MonitoringHandler {
+        +server: MonitoringServer
+        +do_GET() None
+        -require(permission) bool
+        -stream_camera() None
+        -send_json(payload) None
+        -send_file(path: Path) None
+        -log_message(format, args) None
+    }
+    note for MonitoringHandler "Routes: GET /stream, /status, /api/reports"
+
+    class AccessControl {
+        +hashalg: str
+        +accstore: bin
+        +signed_in: dict
+        +roles: dict
+        +sign_in(user, password) Optional~str~
+        +sign_out(token) bool
+        +can(token, permission) bool
+    }
+
+    class MonitoringServer {
+        +access: AccessControl
+        +camera_worker: CameraWorker
+        +detector: RiskDetector
+        +state: MonitorState
+        +events: EventHistoryStore
+        +reports: WeeklyReportService
+        +serve(port, camera_worker) None
+    }
+
+    class CameraWorker {
+        +camera_source: str
+        -properties: dict
+        +start() None
+        +stop() None
+        +get() ndarray
+        -run() None
+    }
+
+    class CameraSourceAsync {
+        +camera_source: Socket
+        +properties: dict
+        +framebuf: deque
+        +start() None
+        +stop() None
+        +get() ndarray
+    }
+
+    class ServiceState {
+        <<enumeration>>
+        Stopped
+        Starting
+        Monitoring
+        Degraded
+        Stopping
+        Failed
+    }
+
+    class MonitorState {
+        +status: ServiceState
+        +latest_frame: ndarray
+        +counts: dict
+        +assessment: RiskAssessment
+        +latency_ms: float
+        +fps: float
+        +set_status(status) None
+        +update(frame, counts, assessment) None
+        +snapshot() dict
+    }
+
+    class RiskAssessment {
+        +fused: Optional~float~
+        +rule: float
+        +learned: Optional~float~
+        +learned_available: bool
+        +covariance: float
+        +violations: list
+    }
+
+    class RiskDetector {
+        +qvec: deque
+        +parameters: dict
+        +results: dict
+        +init(yolo_path, stgnn_path, winsize, ...)
+        +preload(frames)
+        +call(frame, draw) tuple
+    }
+
+    class Detector {
+        +model: YOLO
+        +tracker: ByteTrackTracker
+        +track_dict: dict
+        +init(model: str, framerate: int, track_life: int)
+        +call(frame) Detections
+        +only_track(frame, ids) tuple
+        +separate(dets, frame) dict
+        +get_vectors(frame, ud) list
+        +draw(frame, dets, vectors) frame
+    }
+
+    class DetNG {
+        +rules: ndarray
+        +weights: ndarray
+        +IDX: dict
+        +num_rules: int
+        +compile(rules_with_weights) DetNG
+        +execute(fvecs) tuple
+    }
+
+    class STGNN {
+        +graph_radius: float
+        +node_encoder: Sequential
+        +message_network: Sequential
+        +spatial_update: GRUCell
+        +temporal_network: GRU
+        +motion_head: Sequential
+        -encode_frame(frame) Tensor
+        +forward(feature_history) Tensor
+        +predict_kinematics(feature_history) ndarray
+        +score_forecast(feature_history, observed_next_frame, calibrator)
+    }
+
+    class KalmanFilter {
+        +Q: float
+        +P: float
+        +x: float
+        +fuse(stgnn_risk, detng_risk, stgnn_variance, detng_variance)
+    }
+
+    class MotionAnomalyCalibrator {
+        +normal_errors: ndarray_or_none
+        +fit(normal_errors) MotionAnomalyCalibrator
+        +score(forecast_errors) ndarray
+    }
+
+    class EventHistoryStore {
+        <<data package>>
+    }
+    class WeeklyReportService {
+        <<data package>>
+    }
+
+    BaseRequestHandler <|-- MonitoringHandler
+    MonitoringHandler --> "1" MonitoringServer
+    MonitoringHandler ..> AccessControl : checks permission
+    MonitoringHandler ..> MonitorState : reads snapshot
+    MonitoringHandler ..> WeeklyReportService : report requests
+    MonitoringServer *-- "1" AccessControl
+    MonitoringServer *-- "1" RiskDetector
+    MonitoringServer *-- "1" MonitorState
+    MonitoringServer o-- CameraWorker
+    MonitoringServer --> EventHistoryStore
+    MonitoringServer --> WeeklyReportService
+    CameraSourceAsync ..|> CameraWorker
+    CameraWorker ..> RiskDetector : each frame
+    CameraWorker --> MonitorState : updates
+    CameraWorker ..> EventHistoryStore : enqueues records
+    RiskDetector *-- Detector
+    RiskDetector *-- DetNG
+    RiskDetector *-- STGNN
+    RiskDetector *-- KalmanFilter
+    RiskDetector ..> RiskAssessment : returns
+    STGNN --> "1" MotionAnomalyCalibrator : score_forecast uses
+    MonitorState --> ServiceState
+    MonitorState o-- RiskAssessment

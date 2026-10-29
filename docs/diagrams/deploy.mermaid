@@ -1,0 +1,71 @@
+flowchart LR
+    subgraph DEV["Environment: local development"]
+        DEVM["Developer machine: CPU, recorded video"]
+    end
+
+    subgraph GH["GitHub"]
+        REPO["Repository: code, Mermaid sources, tag milestone-3"]
+        subgraph CI["GitHub Actions"]
+            PR["On pull request: lint, unit tests, image build"]
+            MAIN["On merge to main: build and push image"]
+            DEPLOY["Deploy job: SSH to VM, pull tag, compose up"]
+        end
+        SECRETS[/"Actions secrets: registry token, deploy SSH key"/]
+    end
+
+    REG[("Container registry: GHCR")]
+
+    subgraph CLOUD["Environment: cloud GPU VM, demo and production"]
+        subgraph DOCKER["Docker Compose"]
+            subgraph PROXY["Container: tls-proxy"]
+                TLS["TLS termination, port 443"]
+            end
+            subgraph SVC["Container: monitoring-service, NVIDIA runtime"]
+                MH["MonitoringHandler"]
+                AC["AccessControl"]
+                CW["CameraWorker + CameraSourceAsync"]
+                RD["RiskDetector: Detector, DetNG, STGNN, Kalman"]
+                MS["MonitorState"]
+                EH["EventHistoryStore: only writer"]
+                WRS["WeeklyReportService + ReportAggregator"]
+            end
+        end
+        V1[/"Volume models: YOLO, STGNN, calibrator weights"/]
+        V2[("Volume data: risk.db SQLite WAL, accstore")]
+        ENV[/".env on the VM: session key, camera credentials. Not in the repo."/]
+    end
+
+    subgraph SITE["Device: construction-site camera host"]
+        KC["OpenCV VideoCapture"]
+        KS["CameraServe"]
+    end
+
+    subgraph WS["Device: workstation"]
+        APP["Desktop Application: Application, MonitoringClient, Renderer, Dashboard"]
+    end
+
+    DEVM -->|"git push, pull request"| REPO
+    REPO --> PR
+    PR -->|"merge"| MAIN
+    MAIN -->|"push image"| REG
+    MAIN --> DEPLOY
+    SECRETS -.-> MAIN
+    SECRETS -.-> DEPLOY
+    DEPLOY -->|"restart stack"| DOCKER
+    REG -->|"image pull"| DOCKER
+
+    KC --> KS
+    KS -->|"TCP video stream"| CW
+    APP <-->|"HTTPS: JSON and MJPEG"| TLS
+    TLS --> MH
+    MH --> AC
+    MH --> MS
+    MH --> WRS
+    CW --> RD
+    CW --> MS
+    CW -->|"enqueue estimates and events"| EH
+    WRS -->|"read-only queries"| EH
+    EH -->|"single write connection"| V2
+    AC -->|"read and write password hashes"| V2
+    RD -.->|"load weights at start"| V1
+    ENV -.-> SVC

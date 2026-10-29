@@ -1,0 +1,18 @@
+erDiagram
+    USER ||--o{ SESSION : has
+    SESSION ||--o{ RISK_ESTIMATE : records
+
+    USER {
+        string UserID PK
+    }
+    SESSION {
+        string SessionID PK
+        string UserID FK
+        date Date
+    }
+    RISK_ESTIMATE {
+        string SessionID PK, FK
+        datetime Timestamp PK
+        float Score
+        float Covariance
+    }
