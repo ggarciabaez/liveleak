@@ -173,17 +173,38 @@ def test_forward_rejects_bad_shapes(model, shape):
         model(np.zeros(shape))
 
 
-@pytest.mark.xfail(strict=True, reason="T=0 reaches feats[-1] and raises IndexError instead of ValueError")
 def test_forward_rejects_zero_frames(model):
     with pytest.raises(ValueError):
         model(np.zeros((0, 2, 13)))
 
 
-@pytest.mark.xfail(strict=True, reason="mask shape is never validated; a (T, N') mask raises IndexError")
 def test_forward_rejects_mismatched_mask_shape(model, win):
     feats, mask = win
     with pytest.raises(ValueError):
         model(feats, mask[:, :2])
+
+
+def test_forward_rejects_id_change_within_a_slot(model, win):
+    feats, mask = win
+    bad = feats.copy()
+    bad[-1, 0, 0] = 99  # slot 0 was track 1 in every other frame
+    with pytest.raises(ValueError):
+        model(bad, mask)
+
+
+def test_forward_rejects_duplicate_ids_across_slots(model, win):
+    feats, mask = win
+    bad = feats.copy()
+    bad[:, 1, 0] = bad[:, 0, 0]
+    with pytest.raises(ValueError):
+        model(bad, mask)
+
+
+def test_id_guard_ignores_padding_rows(model, win):
+    feats, mask = win
+    bad = feats.copy()
+    bad[~mask, 0] = 12345  # junk ids in padding must not trip the guard
+    assert torch.isfinite(model(bad, mask)).all()
 
 
 def test_mask_none_infers_presence_from_padding_id(model, win):
@@ -269,7 +290,6 @@ def test_gradients_flow_with_partial_mask(model, win):
     assert any(g.abs().sum() > 0 for g in grads)
 
 
-@pytest.mark.xfail(strict=True, reason="forward keeps cones in the graph; filter them upstream or inside forward")
 def test_cones_do_not_affect_moving_entities(model, make_frame):
     base_slots = [
         (1, PERSON, 0, 5, 50.0, 50.0, -2.0, 0.0),
@@ -350,7 +370,6 @@ def test_window_error_ignores_padding_contents(model, win):
 
 
 @pytest.mark.parametrize("case", ["one_frame", "no_overlap"])
-@pytest.mark.xfail(strict=True, reason="returns a fake [0.0] sample; it would pollute the calibration set. Should be empty")
 def test_window_error_with_nothing_to_evaluate_is_empty(model, win, case):
     feats, mask = win
     if case == "one_frame":
@@ -359,6 +378,21 @@ def test_window_error_with_nothing_to_evaluate_is_empty(model, win, case):
         mask = mask.copy()
         mask[-1] = False
     assert model.compute_window_error(feats, mask).numel() == 0
+
+
+def test_window_error_skips_cones(model, make_frame):
+    people = [
+        (1, PERSON, 0, 5, 50.0, 50.0, -2.0, 0.0),
+        (2, MACHINE, 0, 5, 30.0, 50.0, 0.0, 0.0),
+    ]
+    cone = (9, CONE, 0, 5, 45.0, 52.0, 0.0, 0.0)
+    f0, m0 = _window(make_frame, people)
+    f1, m1 = _window(make_frame, people + [cone])
+    with torch.no_grad():
+        e0 = model.compute_window_error(f0, m0)
+        e1 = model.compute_window_error(f1, m1)
+    assert e1.shape == e0.shape == (2,)
+    np.testing.assert_allclose(e0, e1, atol=1e-5)
 
 
 def test_window_error_feeds_the_calibrator(model, win):
