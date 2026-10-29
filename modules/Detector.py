@@ -47,9 +47,9 @@ def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
     return ppe_map
 
 class Detector:
-    def __init__(self, model: str, framerate=30, track_life = 30, **kwargs):
+    def __init__(self, model: str, framerate=30, track_life = 5, **kwargs):
         self.model = YOLO(model, task='detect')
-        self.tracker = Tracker(track_life, framerate, **kwargs)
+        self.tracker = Tracker(track_life*framerate, framerate, **kwargs)
         self.track_dict = {}
 
     def __call__(self, frame, **kwargs):
@@ -87,7 +87,7 @@ class Detector:
         Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
         """
         if ud is None:
-            td, ud = self.only_track(frame, ids=(5, 8, 9))
+            td, ud = self.only_track(frame, ids=(ID_PERSON, ID_MACHINERY, ID_VEHICLE))
         else:
             td = frame
         moving = self.separate(td)
@@ -114,6 +114,7 @@ class Detector:
             cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
 
             for i in range(len(dets)):
+                # if untracked, tracker_id is None.
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
 
                 # Untracked items (like cones) get ID -1, tracked must have an ID
@@ -153,7 +154,7 @@ class Detector:
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
     # Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
-    def draw(self, frame, dets, vectors):
+    def draw(self, frame, vectors):
         colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 0, 255), 3: (0, 255, 255)}
         for idx, vector in enumerate(vectors):
             for det in vector:
@@ -193,9 +194,8 @@ if __name__ == "__main__":  # No se toca!!!
         ret, frame = cam.read()
         if not ret:
             break
-        dets = det(frame)
-        vecs = det.get_vectors(dets)
-        frame = det.draw(frame, dets, vecs)
+        vecs = det.get_vectors(frame)
+        frame = det.draw(frame, vecs)
         cv2.imshow("frame", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
