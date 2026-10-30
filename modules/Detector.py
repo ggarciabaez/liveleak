@@ -102,32 +102,30 @@ class Detector:
                 return
             type_onehot = [0, 0, 0, 0]
             type_onehot[type_idx] = 1
-            states = np.array([t.state_estimator.get_state()["state"] for t in self.tracker.tracks])
-            if len(states) == 0:
-                return np.empty((4, 0, 13))
-            else:
-                states = states[..., 0]
-            xyxy = states[:, :4]
-            v = states[:, 4:]
+            xyxy = np.asarray(dets.xyxy)
             cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
             cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
 
             for i in range(len(dets)):
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
+                if t_id is None:
+                    t_id = -1
 
                 # Untracked items (like cones) get ID -1, tracked must have an ID
                 if type_idx != 3 and (t_id is None or t_id == -1):
                     continue
 
                 icx, icy = cx[i], cy[i]
-                va, vb = v[i, :2], v[i, 2:]
                 vx, vy = 0.0, 0.0
 
-                if t_id != -1:
+                if t_id >= 0:
                     current_centroids[t_id] = (icx, icy)
-                    # Pull previous coordinates if they exist
+                    # Derive velocity from this ID's previous observed center.
+                    # If the ID was absent on the preceding frame, start at zero
+                    # instead of bridging a gap and creating a false jump.
                     if t_id in self.track_dict:
-                        vx, vy = (va+vb)/2.0
+                        previous_x, previous_y = self.track_dict[t_id]
+                        vx, vy = icx - previous_x, icy - previous_y
 
                 # Default PPE state for non-persons
                 hh, mask, vest, na = 0, 0, 0, 1

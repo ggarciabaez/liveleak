@@ -8,7 +8,7 @@ entities are present in every frame (including the prediction target frame).
 
 Feature columns are ``[track_id, person, machine, vehicle, cone, x, y, vx,
 vy, hardhat, mask, vest, na]``. Positions are normalized by image width and
-height; velocities are normalized in the same units per processed frame.
+height; velocity is normalized displacement per saved frame.
 Untracked ``-1`` detections are removed because they cannot be aligned safely
 across time
 """
@@ -33,12 +33,14 @@ def normalize_frame_vectors(
     vectors: Sequence[np.ndarray],
     image_width: int,
     image_height: int,
+    previous_frame: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Combine Detector output, remove untracked rows, and normalize geometry
+    """Combine tracked vectors, normalize geometry, and make per-frame velocity.
 
-    The detector reports pixel coordinates and per-update pixel displacement.
-    This conversion must also be used by live inference if it consumes these
-    prepared features
+    Velocity is the normalized center displacement from the immediately
+    preceding saved/processed frame for the same track. If a track was absent
+    from that frame, its velocity starts at zero. Live inference uses this same
+    function so training and inference share identical preprocessing.
     """
     if image_width <= 0 or image_height <= 0:
         raise ValueError("image_width and image_height must be positive")
@@ -63,8 +65,18 @@ def normalize_frame_vectors(
 
     features[:, 5] /= image_width
     features[:, 6] /= image_height
-    features[:, 7] /= image_width
-    features[:, 8] /= image_height
+    features[:, 7:9] = 0.0
+    if previous_frame is not None and len(previous_frame):
+        previous = np.asarray(previous_frame, dtype=np.float32)
+        if previous.ndim != 2 or previous.shape[1] != FEATURE_COUNT:
+            raise ValueError("previous_frame must have shape (entities, 13)")
+        previous_positions = {
+            int(row[0]): row[5:7] for row in previous if row[0] >= 0
+        }
+        for row in features:
+            previous_position = previous_positions.get(int(row[0]))
+            if previous_position is not None:
+                row[7:9] = row[5:7] - previous_position
     return features
 
 
@@ -144,6 +156,7 @@ def prepare_video(
 
     detector = Detector(str(detector_weights))
     frames: list[np.ndarray] = []
+    previous_saved_frame: np.ndarray | None = None
     frame_index = 0
     source_fps = float(capture.get(cv2.CAP_PROP_FPS))
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -158,7 +171,14 @@ def prepare_video(
             detections = detector(image)
             vectors = detector.get_vectors(detections)
             if frame_index % frame_step == 0:
-                frames.append(normalize_frame_vectors(vectors, image.shape[1], image.shape[0]))
+                saved_frame = normalize_frame_vectors(
+                    vectors,
+                    image.shape[1],
+                    image.shape[0],
+                    previous_saved_frame,
+                )
+                frames.append(saved_frame)
+                previous_saved_frame = saved_frame
             frame_index += 1
     finally:
         capture.release()
@@ -182,7 +202,7 @@ def prepare_video(
             "track_id", "person", "machine", "vehicle", "cone", "x", "y",
             "vx", "vy", "hardhat", "mask", "vest", "na",
         ],
-        "coordinate_units": "image fractions; velocity is image fraction per saved frame",
+        "coordinate_units": "image fractions; velocity is displacement per saved frame",
     }
     output_path = output_dir / f"{video_path.stem}.npz"
     np.savez_compressed(

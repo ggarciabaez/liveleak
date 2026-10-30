@@ -2,7 +2,8 @@
 
 ## Model and risk pipeline
 
-- [ ] Connect the ST-GNN to live `RiskDetector` inference using track-aligned feature history, forecast scoring, and a calibrated risk score before fusion.
+- [x] Keep live ST-GNN inputs normalized and aligned by persistent track ID; omit untracked detections and skip windows with ID discontinuities.
+- [ ] Fit and provide a motion-error calibrator from held-out normal clips. Until it is fitted, the live model score and fused score remain unavailable (`None`), while the deterministic rule score is still reported.
 - [ ] Train and validate the ST-GNN with the dataset pipeline; no trained checkpoint is currently committed.
 - [ ] Review and tune DetNG rule weights using representative clips.
 - [ ] Profile the Kalman Filter fusion and the end-to-end inference pipeline for bottlenecks.

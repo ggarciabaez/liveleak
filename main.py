@@ -9,7 +9,7 @@ STD_DETNG = 0.1
 def main():
     cam = cv2.VideoCapture(0)
     model = RiskDetector("./assets/ppe_50ep.engine", "./assets/stgnn.pth",
-                         WINSIZE, STD_DETNG, STD_STGNN, graph_rad=250)
+                         WINSIZE, STD_DETNG, STD_STGNN, graph_rad=0.25)
     model.preload([cam.read()[1] for _ in range(WINSIZE)])
     while True:
         ret, frame = cam.read()
