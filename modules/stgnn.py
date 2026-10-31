@@ -232,6 +232,17 @@ class STGNN(nn.Module):
 
         return torch.sqrt(torch.mean((pred_kin[eval_entities] - obs_kin[eval_entities]) ** 2, dim=-1))
 
+    def predict_kinematics(self, feature_history):
+        """Predict next-step [px, py, vx, vy] values as a NumPy array."""
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.inference_mode():
+                prediction = self(feature_history)
+            return prediction.detach().cpu().numpy()
+        finally:
+            self.train(was_training)
+
     def save_weights(self, path):
         torch.save(self.state_dict(), path)
 

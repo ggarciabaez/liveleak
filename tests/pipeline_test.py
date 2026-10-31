@@ -2,7 +2,6 @@
 import inspect
 
 import numpy as np
-import pytest
 import torch
 
 from modules.detng import DetNG, get_rules
@@ -24,7 +23,6 @@ def test_load_state_dict_roundtrip(tmp_path, history):
     np.testing.assert_allclose(a.predict_kinematics(history), b.predict_kinematics(history), rtol=1e-5)
 
 
-@pytest.mark.xfail(reason="RiskDetector assigns the result of load_state_dict() (a key report) to self.model", strict=True)
 def test_risk_detector_keeps_model_not_load_result():
     from modules.risk import RiskDetector
     src = inspect.getsource(RiskDetector.__init__)
