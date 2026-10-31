@@ -10,7 +10,7 @@ from modules.Detector import Detector
 from modules.dataset import align_window, normalize_frame_vectors
 from modules.detng import DetNG, get_rules
 from modules.kfilter import KalmanFilter
-from modules.stgnn import STGNN
+from modules.stgnn import MotionAnomalyCalibrator, STGNN
 
 
 class RiskDetector:
@@ -24,9 +24,12 @@ class RiskDetector:
         graph_rad=0.25,
         ruleset=None,
         calibrator=None,
+        calibrator_path=None,
     ):
         if winsize < 1:
             raise ValueError("winsize must be positive")
+        if calibrator is not None and calibrator_path is not None:
+            raise ValueError("provide either calibrator or calibrator_path, not both")
 
         self.detector = Detector(yolo_path)
         self.detng = DetNG().compile(get_rules() if ruleset is None else ruleset)
@@ -51,6 +54,8 @@ class RiskDetector:
         # Keep one extra frame so each current observation can score the
         # forecast made from the preceding winsize frames.
         self.model_frames = deque(maxlen=winsize + 1)
+        if calibrator_path is not None:
+            calibrator = MotionAnomalyCalibrator().load(calibrator_path)
         self.calibrator = calibrator
         self.sigdet = std_detng
         self.sigstg = std_stgnn
@@ -144,7 +149,7 @@ class RiskDetector:
             )
 
         if draw:
-            frame = self.detector.draw(frame, detections, vector_groups)
+            frame = self.detector.draw(frame, vector_groups)
 
         self.results = {
             "scores": (model_score, rule_score),

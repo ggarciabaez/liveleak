@@ -335,7 +335,7 @@ class Detector:
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
 
     # Vector format: [id, person, machine, vehicle, cone, px, py, vx, vy, hh, mask, vest, na]
-    def draw(self, frame, dets, vectors):
+    def draw(self, frame, vectors):
         colors = {0: (0, 255, 0), 1: (255, 0, 0), 2: (0, 0, 255), 3: (0, 255, 255)}
         for idx, vector in enumerate(vectors):
             for det in vector:
@@ -377,7 +377,7 @@ if __name__ == "__main__":  # No se toca!!!
             break
         dets = det(frame)
         vecs = det.get_vectors(dets)
-        frame = det.draw(frame, dets, vecs)
+        frame = det.draw(frame, vecs)
         cv2.imshow("frame", frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break

@@ -5,11 +5,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.nn import functional as F
 
 from modules.dataset import Dataset
-from modules.stgnn import STGNN
+from modules.stgnn import MotionAnomalyCalibrator, STGNN
 
 
 def _run_epoch(model, dataset, device, optimizer=None) -> float:
@@ -37,10 +38,30 @@ def _run_epoch(model, dataset, device, optimizer=None) -> float:
     return sum(losses) / len(losses)
 
 
+def _fit_calibrator(model, dataset, device) -> MotionAnomalyCalibrator:
+    """Calibrate forecast errors using held-out normal validation windows."""
+    model.eval()
+    errors = []
+    with torch.inference_mode():
+        for history, target in dataset:
+            prediction = model(history.to(device))
+            target = target.to(device)
+            entity_errors = torch.sqrt(
+                torch.mean(torch.square(prediction - target), dim=1)
+            )
+            errors.append(entity_errors.cpu().numpy())
+    if not errors:
+        raise ValueError(
+            "the validation split has no aligned windows for calibrator fitting"
+        )
+    return MotionAnomalyCalibrator().fit(np.concatenate(errors))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--features-dir", default="dataset_bundle/local_data/prepared")
     parser.add_argument("--output", default="dataset_bundle/local_data/stgnn_checkpoint.pth")
+    parser.add_argument("--calibration-output", default="dataset_bundle/local_data/calib.npz")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--window-size", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=64)
@@ -95,6 +116,16 @@ def main() -> None:
             )
 
     print(f"Best checkpoint saved to {output_path.resolve()}")
+
+    # Calibrate using the selected best checkpoint and a separate video-level
+    # validation split. These clips should represent normal activity.
+    best_checkpoint = torch.load(output_path, map_location=device, weights_only=False)
+    model.load_state_dict(best_checkpoint["model_state_dict"])
+    calibrator = _fit_calibrator(model, validation_data, device)
+    calibration_path = Path(args.calibration_output)
+    calibration_path.parent.mkdir(parents=True, exist_ok=True)
+    calibrator.save(calibration_path)
+    print(f"Motion calibrator saved to {calibration_path.resolve()}")
 
 
 if __name__ == "__main__":

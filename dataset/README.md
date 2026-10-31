@@ -31,8 +31,14 @@ radius in normalized image-coordinate units:
 python -m scripts.train_stgnn --features-dir dataset_bundle/local_data/prepared --graph-radius <radius>
 ```
 
-The checkpoint is written under `dataset_bundle/local_data/` by default and
-is not committed. Training needs a nonempty video-level validation split.
+The checkpoint and `calib.npz` are written under `dataset_bundle/local_data/`
+by default and are not committed. The calibrator is fitted from the validation
+split, so those validation videos should represent normal activity. Training
+and calibration both need a nonempty video-level validation split.
+
+`main.py` loads these two generated files for live inference. It also needs the
+YOLO detector weights at `assets/ppe_50ep.engine`. These model assets are local
+files and are not included in the repository.
 
 Source: [A Comprehensive Image and Video Dataset for Computer Vision-Based
 Construction Safety Management](https://data.mendeley.com/datasets/xjm2czccx9/2),

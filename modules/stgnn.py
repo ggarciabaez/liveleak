@@ -42,6 +42,23 @@ class MotionAnomalyCalibrator:
         ranks = np.searchsorted(self.normal_errors, forecast_errors, side="right")
         return ranks / self.normal_errors.size
 
+    def save(self, path):
+        """Save fitted normal-clip errors in the .npz format used by the app."""
+        if self.normal_errors is None:
+            raise RuntimeError("calibrator must be fitted before saving")
+        np.savez(path, errors=self.normal_errors)
+        return self
+
+    def load(self, path):
+        """Load calibration errors saved under the ``errors`` key."""
+        if path is None:
+            return self
+        with np.load(path, allow_pickle=False) as calibration:
+            if "errors" not in calibration:
+                raise ValueError("calibration file must contain an 'errors' array")
+            errors = calibration["errors"]
+        return self.fit(errors)
+
 
 class STGNN(nn.Module):
     def __init__(self, graph_radius, hidden_dim=64):
