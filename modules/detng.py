@@ -24,7 +24,7 @@ class DetNG:
         self.weights = np.array(self.weights)
         return self
 
-    def execute(self, fvecs):
+    def execute(self, fvecs, mask):
         """
         Executes rules over a (T, N, 13) feature buffer.
         Evaluates risk on the most recent frame T-1.
@@ -33,10 +33,9 @@ class DetNG:
             return 0.0, []
 
         # Extract latest frame (assume shape is T, N, 13)
-        frames = np.atleast_3d(fvecs)
         full_ctx = []
         for i in range(len(fvecs)):
-            current_frame = frames[i]
+            current_frame = fvecs[i][mask[i]]  # mask should be 2d bool array
 
             # Filter valid entities (probability > 0.5)
             persons = current_frame[current_frame[:, self.IDX['person']] > 0.5]

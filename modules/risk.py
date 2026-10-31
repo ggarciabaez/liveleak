@@ -59,7 +59,7 @@ class RiskDetector:
         self.calibrator = calibrator
         self.sigdet = std_detng
         self.sigstg = std_stgnn
-
+        
     @staticmethod
     def _combine_vectors(vector_groups):
         nonempty = [np.asarray(group) for group in vector_groups if len(group)]
