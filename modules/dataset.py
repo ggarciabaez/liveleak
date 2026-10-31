@@ -9,8 +9,9 @@ entities are present in every frame (including the prediction target frame).
 Feature columns are ``[track_id, person, machine, vehicle, cone, x, y, vx,
 vy, hardhat, mask, vest, na]``. Positions are normalized by image width and
 height; velocity is normalized displacement per saved frame.
-Untracked ``-1`` detections are removed because they cannot be aligned safely
-across time
+The detector's identity resolver assigns persistent IDs to tracked objects and
+spatially matches untracked cones. Remaining untracked ``-1`` detections are
+removed.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from torch.utils.data import Dataset as TorchDataset
 
 FEATURE_COUNT = 13
 DEFAULT_VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv", ".webm")
+PADDING_TRACK_ID = -1
 
 
 def normalize_frame_vectors(
@@ -37,9 +39,10 @@ def normalize_frame_vectors(
 ) -> np.ndarray:
     """Combine tracked vectors, normalize geometry, and make per-frame velocity.
 
-    Velocity is the normalized center displacement from the immediately
-    preceding saved/processed frame for the same track. If a track was absent
-    from that frame, its velocity starts at zero. Live inference uses this same
+    The detector's identity resolver assigns persistent IDs before this
+    function runs. Remaining untracked detections are removed. Velocity is the
+    normalized center displacement from the immediately preceding
+    saved/processed frame for the same ID. Live inference uses this same
     function so training and inference share identical preprocessing.
     """
     if image_width <= 0 or image_height <= 0:
@@ -55,9 +58,9 @@ def normalize_frame_vectors(
     if not np.isfinite(features).all():
         raise ValueError("detector features must be finite")
 
-    # Cones and other detections without a persistent identity cannot form a
-    # temporal training target, so omit them rather than inventing identities.
-    features = features[features[:, 0] >= 0].copy()
+    # Keep resolver-assigned synthetic cone IDs (values <= -2); -1 remains
+    # reserved for padding and untracked detections that cannot be aligned.
+    features = features[features[:, 0] != PADDING_TRACK_ID]
     if features.size == 0:
         return np.empty((0, FEATURE_COUNT), dtype=np.float32)
     if np.unique(features[:, 0]).size != features.shape[0]:
@@ -81,7 +84,7 @@ def normalize_frame_vectors(
 
 
 def align_window(frames: Sequence[np.ndarray]) -> np.ndarray | None:
-    """Align a frame window by persistent ID; return ``None`` if empty/invalid"""
+    """Align by persistent tracker or synthetic cone ID; return ``None`` if empty."""
     if not frames:
         return None
 
@@ -93,7 +96,8 @@ def align_window(frames: Sequence[np.ndarray]) -> np.ndarray | None:
             raise ValueError("each frame must have shape (entities, 13)")
         if not np.isfinite(frame).all():
             raise ValueError("frame features must be finite")
-        tracked = frame[frame[:, 0] >= 0]
+        # Synthetic cone IDs are negative but valid; only -1 means absent.
+        tracked = frame[frame[:, 0] != PADDING_TRACK_ID]
         ids = tracked[:, 0]
         if np.unique(ids).size != ids.size:
             raise ValueError("track IDs must be unique within each frame")
@@ -298,7 +302,8 @@ class Dataset(TorchDataset):
             self._videos[path] = frames
             for start in range(max(0, len(frames) - window_size)):
                 # The target frame is also included for identity alignment.
-                if align_window(frames[start : start + window_size + 1]) is not None:
+                aligned = align_window(frames[start : start + window_size + 1])
+                if aligned is not None and np.any(aligned[-1, :, 4] <= 0.5):
                     self._windows.append((path, start))
 
     def __len__(self) -> int:
@@ -311,6 +316,11 @@ class Dataset(TorchDataset):
         )
         if aligned is None:  # Guard against accidental mutation after indexing.
             raise RuntimeError(f"window no longer has aligned entities: {path}")
+        # Cones provide stable synthetic IDs in cached frames, but the STGNN
+        # is trained to forecast moving tracked entities only.
+        aligned = aligned[:, aligned[-1, :, 4] <= 0.5]
+        if aligned.shape[1] == 0:
+            raise RuntimeError(f"window no longer has moving entities: {path}")
         history = torch.from_numpy(aligned[:-1].copy())
         target = torch.from_numpy(aligned[-1, :, 5:9].copy())
         return history, target

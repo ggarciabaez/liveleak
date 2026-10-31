@@ -2,7 +2,7 @@
 
 ## Model and risk pipeline
 
-- [x] Keep live ST-GNN inputs normalized and aligned by persistent track ID; omit untracked detections and skip windows with ID discontinuities.
+- [x] Normalize live ST-GNN inputs, reconcile short tracker-ID breaks using motion/box matching (plus a lightweight appearance cue for people), spatially match cones, and skip motion-scoring windows without persistent moving-object IDs.
 - [ ] Fit and provide a motion-error calibrator from held-out normal clips. Until it is fitted, the live model score and fused score remain unavailable (`None`), while the deterministic rule score is still reported.
 - [ ] Train and validate the ST-GNN with the dataset pipeline; no trained checkpoint is currently committed.
 - [ ] Review and tune DetNG rule weights using representative clips.

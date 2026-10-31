@@ -87,8 +87,8 @@ class RiskDetector:
         vector_groups = self.detector.get_vectors(detections)
         current_vectors = self._combine_vectors(vector_groups)
 
-        # The deterministic rules can use untracked cones; unlike the STGNN,
-        # they do not need cone identities across frames.
+        # Rules consume raw detections; Detector has already assigned
+        # persistent IDs to movers and spatially matched the cone detections.
         rule_result = self.detng.execute(current_vectors[np.newaxis, ...])
         if len(rule_result) == 2:
             rule_score, violations = rule_result
@@ -105,29 +105,36 @@ class RiskDetector:
             if aligned is None:
                 unavailable_reason = "no_track_ids_persist_across_window"
             else:
-                feature_history = torch.from_numpy(aligned[:-1].copy())
-                observed_next_frame = aligned[-1].copy()
-                with torch.inference_mode():
-                    prediction = self.model(feature_history)
-                    observed_kinematics = torch.as_tensor(
-                        observed_next_frame[:, 5:9], dtype=torch.float32
-                    )
-                    forecast_errors = torch.sqrt(
-                        torch.mean(
-                            torch.square(prediction.cpu() - observed_kinematics),
-                            dim=1,
-                        )
-                    ).cpu().numpy()
-
-                if (
-                    self.calibrator is not None
-                    and getattr(self.calibrator, "normal_errors", None) is not None
-                ):
-                    calibrated = self.calibrator.score(forecast_errors)
-                    model_score = float(np.max(calibrated))
-                    unavailable_reason = None
+                # Cones have stable IDs for data alignment, but are not motion
+                # targets and must not hide a broken moving-object ID.
+                moving_entities = aligned[-1, :, 4] <= 0.5
+                if not moving_entities.any():
+                    unavailable_reason = "no_tracked_moving_entities"
                 else:
-                    unavailable_reason = "motion_calibrator_not_fitted"
+                    aligned = aligned[:, moving_entities]
+                    feature_history = torch.from_numpy(aligned[:-1].copy())
+                    observed_next_frame = aligned[-1].copy()
+                    with torch.inference_mode():
+                        prediction = self.model(feature_history)
+                        observed_kinematics = torch.as_tensor(
+                            observed_next_frame[:, 5:9], dtype=torch.float32
+                        )
+                        forecast_errors = torch.sqrt(
+                            torch.mean(
+                                torch.square(prediction.cpu() - observed_kinematics),
+                                dim=1,
+                            )
+                        ).cpu().numpy()
+
+                    if (
+                        self.calibrator is not None
+                        and getattr(self.calibrator, "normal_errors", None) is not None
+                    ):
+                        calibrated = self.calibrator.score(forecast_errors)
+                        model_score = float(np.max(calibrated))
+                        unavailable_reason = None
+                    else:
+                        unavailable_reason = "motion_calibrator_not_fitted"
 
         fused_score = None
         covariance = gain = None
