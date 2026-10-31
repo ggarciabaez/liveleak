@@ -1,16 +1,20 @@
-# Deployment & Rollout — Stub
+# Deployment & Rollout
 
-Split out from the main handbook so it doesn't compete with the ST-GNN work for attention. Light on detail for now — flesh out once the core pipeline (Parts 1–3 of the handbook) is further along.
+This checklist tracks the deployment work that remains. The repository already has a baseline GitHub Actions workflow in `.github/workflows/ci.yml`: it runs Ruff on pull requests and CPU-based pytest with coverage on pull requests and pushes to `main`. That workflow does not yet type-check the project or exercise a complete live model pipeline.
 
-## From the class rubric
-- [ ] Peer-reviewed PRs — branch protection + required review before merge
-- [ ] CI pipeline — linter/type-checker + unit & integration tests on every PR
-- [ ] Docker containerization of the pipeline (detector + tracker + forks + fusion)
-- [ ] Public cloud deployment
-- [ ] Mermaid.js diagrams as living documentation in the repo
-- [ ] At least one AI feature — covered by the ST-GNN fork
+## Checklist
 
-## Open questions (not yet decided)
-- [ ] Which cloud target
-- [ ] What the CI test suite actually covers for this project (schema contract tests? rule-engine unit tests? GNN smoke test?)
-- [ ] How the demo gets served (live inference endpoint vs. pre-recorded run)
+- [ ] Configure repository branch protection and required peer review before merge.
+- [x] Add baseline CI for Ruff and CPU unit tests with coverage.
+- [ ] Add type checking and integration tests for the end-to-end pipeline.
+- [ ] Add a model-pipeline smoke test when a deterministic fixture or trained checkpoint is available.
+- [ ] Containerize the detector, tracker, risk fusion, and supporting services.
+- [ ] Choose a deployment target and deploy the demo.
+- [x] Keep the Mermaid design diagrams in `docs/diagrams/` as living project documentation.
+- [ ] Train and validate the ST-GNN, then connect its calibrated risk score to live inference.
+
+## Open questions
+
+- Which hosting target should the team use?
+- Should the demo serve live inference or a pre-recorded run?
+- What model fixture can CI use without committing large video data or model weights?

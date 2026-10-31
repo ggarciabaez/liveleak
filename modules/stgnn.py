@@ -46,6 +46,23 @@ class MotionAnomalyCalibrator:
         calib = np.load(calib_file_load)
         self.normal_errors = calib["errors"]
 
+    def save(self, path):
+        """Save fitted normal-clip errors in the .npz format used by the app."""
+        if self.normal_errors is None:
+            raise RuntimeError("calibrator must be fitted before saving")
+        np.savez(path, errors=self.normal_errors)
+        return self
+
+    def load(self, path):
+        """Load calibration errors saved under the ``errors`` key."""
+        if path is None:
+            return self
+        with np.load(path, allow_pickle=False) as calibration:
+            if "errors" not in calibration:
+                raise ValueError("calibration file must contain an 'errors' array")
+            errors = calibration["errors"]
+        return self.fit(errors)
+
 
 class STGNN(nn.Module):
     # Feature indices for readability
@@ -215,6 +232,17 @@ class STGNN(nn.Module):
 
         return torch.sqrt(torch.mean((pred_kin[eval_entities] - obs_kin[eval_entities]) ** 2, dim=-1))
 
+    def predict_kinematics(self, feature_history):
+        """Predict next-step [px, py, vx, vy] values as a NumPy array."""
+        was_training = self.training
+        self.eval()
+        try:
+            with torch.inference_mode():
+                prediction = self(feature_history)
+            return prediction.detach().cpu().numpy()
+        finally:
+            self.train(was_training)
+
     def save_weights(self, path):
         torch.save(self.state_dict(), path)
 
@@ -266,7 +294,43 @@ def _prepare_feature_sequences(feature_sequences, window_size, name):
     return prepared_sequences
 
 
-# TODO: it'd be sick af to turn this into a decorator, hella niche usage
+def _prepare_feature_sequences(feature_sequences, window_size, name):
+    """Validate and normalize input clips for training/calibration helpers."""
+    if isinstance(feature_sequences, (np.ndarray, torch.Tensor)):
+        if feature_sequences.ndim == 3:
+            sequences = [feature_sequences]
+        elif feature_sequences.ndim == 4:
+            sequences = list(feature_sequences)
+        else:
+            raise ValueError(f"{name} must contain sequences shaped (F, N, 13)")
+    else:
+        sequences = list(feature_sequences)
+
+    if not sequences:
+        raise ValueError(f"{name} must contain at least one sequence")
+
+    prepared = []
+    for sequence_index, sequence in enumerate(sequences):
+        sequence = torch.as_tensor(sequence, dtype=torch.float32).detach().cpu()
+        if sequence.ndim != 3 or sequence.shape[-1] != 13:
+            raise ValueError(f"{name}[{sequence_index}] must have shape (F, N, 13)")
+        if sequence.shape[0] <= window_size:
+            raise ValueError(f"{name}[{sequence_index}] needs more frames than window_size")
+        if sequence.shape[1] == 0:
+            raise ValueError(f"{name}[{sequence_index}] must contain entities")
+        if not torch.isfinite(sequence).all():
+            raise ValueError(f"{name}[{sequence_index}] must contain finite values")
+        track_ids = sequence[:, :, 0]
+        if not torch.equal(track_ids, track_ids[0:1, :].expand_as(track_ids)):
+            raise ValueError(f"{name}[{sequence_index}] must keep tracks in the same row")
+        if any(torch.unique(frame_ids).numel() != sequence.shape[1] for frame_ids in track_ids):
+            raise ValueError(f"{name}[{sequence_index}] needs unique track IDs per frame")
+        prepared.append(sequence)
+    return prepared
+
+
+# Keep calibration explicit: it requires held-out normal sequences and should
+# run after training, rather than being hidden inside a model decorator.
 def fit_motion_anomaly_calibrator(
     model,
     normal_sequences,

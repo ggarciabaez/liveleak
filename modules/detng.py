@@ -24,13 +24,31 @@ class DetNG:
         self.weights = np.array(self.weights)
         return self
 
-    def execute(self, fvecs, mask):
+    def execute(self, fvecs, mask=None):
         """
         Executes rules over a (T, N, 13) feature buffer.
         Evaluates risk on the most recent frame T-1.
+
+        ``mask`` may be supplied for padded feature windows. If omitted, rows
+        with the reserved padding ID (-1) are excluded automatically.
         """
         if len(self.rules) == 0:
-            return 0.0, []
+            return 0.0, [], np.empty(0, dtype=np.float64)
+
+        fvecs = np.asarray(fvecs)
+        if fvecs.ndim == 2:
+            fvecs = fvecs[np.newaxis, ...]
+        if fvecs.ndim != 3 or fvecs.shape[-1] != 13:
+            raise ValueError("fvecs must have shape (T, N, 13) or (N, 13)")
+
+        if mask is None:
+            mask = fvecs[..., 0] != -1
+        else:
+            mask = np.asarray(mask, dtype=bool)
+            if mask.ndim == 1 and fvecs.shape[0] == 1:
+                mask = mask[np.newaxis, ...]
+            if mask.shape != fvecs.shape[:2]:
+                raise ValueError("mask must have shape (T, N)")
 
         # Extract latest frame (assume shape is T, N, 13)
         full_ctx = []
