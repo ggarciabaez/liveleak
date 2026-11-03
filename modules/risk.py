@@ -89,6 +89,7 @@ class RiskDetector:
             return None, frame
         self.qvec.append(vecs)
         fvecs, mask = self.build_window(self.qvec)
+        print(fvecs.shape, mask.shape)
         ngscore, violations, ruleout = self.detng.execute(fvecs, mask)
 
         with torch.inference_mode():

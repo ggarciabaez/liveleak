@@ -146,15 +146,3 @@ def load_checkpoint(path, model, optimizer, scheduler, scaler):
         scheduler.load_state_dict(ckpt["scheduler"])
     scaler.load_state_dict(ckpt["scaler"])
     return int(ckpt["epoch"]), int(ckpt["step"]), float(ckpt["best_val"])
-
-
-# TODO: make the dataset (vectors, decompressed) here. Also use the vector preprocessor here to make it work.
-class Dataset:
-    def __init__(self, cfg: dict):
-        pass
-
-    def make_split(self, val_split, seed=42):
-        pass
-
-    def __call__(self):
-        pass

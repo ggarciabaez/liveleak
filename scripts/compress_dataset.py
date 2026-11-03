@@ -1,10 +1,8 @@
 # TODO: maybe outfit with argparse for paths?
-from batchdet import BatchedDetector
-from modules.dataset import Dataset
 from glob import glob
 import cv2
 import numpy as np
-import pickle
+from batchdet import BatchedDetector
 
 class VideoDataset:
     def __init__(self, path, glob_str="*.mp4", batch_size=8):
@@ -60,7 +58,7 @@ class VideoDataset:
         self._gen_vids()
         return True
 
-det = Detector("../assets/ppe_50ep.engine")
+det = BatchedDetector("../assets/ppe_50ep.engine")
 vdat = VideoDataset("../data/videos")  # TODO: find a dataset, damnit! Also it'd be good to have a dataset handler.
 frameset: list[np.ndarray | None] | None = None
 for frameset in vdat:  # this logic is pretty elegant but we still gotta try it.

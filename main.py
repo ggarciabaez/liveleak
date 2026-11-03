@@ -7,7 +7,7 @@ STD_STGNN = 0.1
 STD_DETNG = 0.1
 
 def main():
-    cam = cv2.VideoCapture(0)
+    cam = cv2.VideoCapture("./data/construction/videos/pexels-akin-victor-10202777-3842x2160-30fps.mp4")
     model = RiskDetector("./assets/ppe_50ep.engine", "./assets/stgnn.pth",
                          "./assets/calib.npz", WINSIZE, STD_DETNG, STD_STGNN, graph_rad=250)
     model.preload_direct(cam)

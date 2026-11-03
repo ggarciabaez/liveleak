@@ -1,5 +1,5 @@
 ﻿from ultralytics import YOLO
-from trackers import ByteTrackTracker as Tracker
+from trackers import OCSORTTracker as Tracker
 import supervision as sv
 import cv2
 import numpy as np
@@ -103,16 +103,8 @@ class Detector:
                 return
             type_onehot = [0, 0, 0, 0]
             type_onehot[type_idx] = 1
-            states = np.array([t.state_estimator.get_state()["state"] for t in self.tracker.tracks])
-            if len(states) == 0:
-                return np.empty((4, 0, 13))
-            else:
-                states = states[..., 0]
-            xyxy = states[:, :4]
-            v = states[:, 4:]
-            cx = (xyxy[:, 0] + xyxy[:, 2]) / 2.0
-            cy = (xyxy[:, 1] + xyxy[:, 3]) / 2.0
-
+            cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) / 2
+            cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) / 2
             for i in range(len(dets)):
                 # if untracked, tracker_id is None.
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
@@ -122,14 +114,12 @@ class Detector:
                     continue
 
                 icx, icy = cx[i], cy[i]
-                va, vb = v[i, :2], v[i, 2:]
-                vx, vy = 0.0, 0.0
 
                 if t_id != -1:
-                    current_centroids[t_id] = (icx, icy)
-                    # Pull previous coordinates if they exist
+                    current_centroids[t_id] = (cx[i], cy[i])
                     if t_id in self.track_dict:
-                        vx, vy = (va+vb)/2.0
+                        px, py = self.track_dict[t_id]
+                        vx, vy = cx[i] - px, cy[i] - py
 
                 # Default PPE state for non-persons
                 hh, mask, vest, na = 0, 0, 0, 1
@@ -148,7 +138,7 @@ class Detector:
         process_subset(moving["vehicle"], 2)
         process_subset(static["cone"], 3)
 
-        self.track_dict = current_centroids
+        self.track_dict.update(current_centroids)
 
         # Convert lists to 2D numpy arrays, return empty 0x13 arrays if no objects found
         return [np.array(v) if len(v) > 0 else np.empty((0, 13)) for v in final_vectors]
