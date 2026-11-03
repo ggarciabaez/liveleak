@@ -2,7 +2,6 @@
 import inspect
 
 import numpy as np
-import pytest
 import torch
 
 from modules.detng import DetNG, get_rules
@@ -11,21 +10,34 @@ from modules.stgnn import STGNN
 
 
 def test_detng_to_kalman_handoff(history):
-    score, *_ = DetNG().compile(get_rules()).execute(history)
+    mask = np.ones(history.shape[:2], dtype=bool)
+    score, *_ = DetNG().compile(get_rules()).execute(history, mask)
     x, p, k = KalmanFilter().fuse(0.2, score, 0.1, 0.1)
     assert 0.0 <= x <= 1.0 and p >= 0 and 0 <= k <= 1
 
 
-def test_load_state_dict_roundtrip(tmp_path, history):
+def test_save_load_weights_roundtrip(tmp_path, history):
+    mask = np.ones(history.shape[:2], dtype=bool)
     a, b = STGNN(50.0, 16), STGNN(50.0, 16)
+    a.eval()
+    b.eval()
+
+    def predict(model):
+        with torch.inference_mode():
+            return model(history, mask).numpy()
+
+    # Sanity: independently initialised models must disagree before loading.
+    assert not np.allclose(predict(a), predict(b))
+
     path = tmp_path / "stgnn.pth"
-    torch.save(a.state_dict(), path)
-    b.load_state_dict(torch.load(path))
-    np.testing.assert_allclose(a.predict_kinematics(history), b.predict_kinematics(history), rtol=1e-5)
+    a.save_weights(path)
+    b.load_weights(path)
+    np.testing.assert_allclose(predict(a), predict(b), rtol=1e-5)
 
 
-@pytest.mark.xfail(reason="RiskDetector assigns the result of load_state_dict() (a key report) to self.model", strict=True)
 def test_risk_detector_keeps_model_not_load_result():
+    """__init__ must assign the STGNN itself to self.model, not a load call's return value."""
     from modules.risk import RiskDetector
-    src = inspect.getsource(RiskDetector.__init__)
-    assert "STGNN(graph_rad).load_state_dict" not in src.replace(" ", "")
+    src = inspect.getsource(RiskDetector.__init__).replace(" ", "")
+    assert "STGNN(graph_rad).load_state_dict" not in src
+    assert "self.model=STGNN(graph_rad)\n" in src
