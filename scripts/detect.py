@@ -101,12 +101,14 @@ def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
 
 
 def extract_frame_rows(
-    results: sv.Detections, tracker: sv.ByteTrack, track_dict: dict
+    results: sv.Detections, tracker: OCSORTTracker | ByteTrackTracker, track_dict: dict
 ) -> np.ndarray:
     """Extracts and merges all entities in a single frame into an (n_t, 13) float32 array.
     Note: Cones keep ID = -1 here; resolution-independent spatial hashing happens at load time."""
     moving, static = process_result(results, tracker)
     ppe_map = match_ppe(moving["person"], static["ppe"])
+    # very stingy btw
+    tracks = {track.tracker_id: (track.state_estimator.kf.state, track.get_state_bbox()) for track in tracker.tracks if (track.tracker_id >= 0 and track.time_since_update == 0)}
 
     rows = []
     current_centroids = {}
@@ -117,30 +119,28 @@ def extract_frame_rows(
         type_onehot = [0.0, 0.0, 0.0, 0.0]
         type_onehot[type_idx] = 1.0
 
-        cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) * 0.5
-        cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) * 0.5
-
         for i in range(len(dets)):
             t_id = int(dets.tracker_id[i]) if (dets.tracker_id is not None and dets.tracker_id[i] is not None) else -1
 
             # Tracked classes must have a valid tracker ID; cones (type_idx == 3) use -1
             if type_idx != 3 and t_id == -1:
                 continue
+            # TODO: use this for the actual detector
+            if t_id == -1:
+                cx = cy = vx = vy = 0.0
+            else:
+                state, (x1, y1, x2, y2) = tracks[t_id]
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                vx, vy = np.asarray(state).reshape(-1)[4:6]
+                current_centroids[t_id] = (cx, cy)
 
-            icx, icy = float(cx[i]), float(cy[i])
-            vx, vy = 0.0, 0.0
-            if t_id != -1:
-                current_centroids[t_id] = (icx, icy)
-                if t_id in track_dict:
-                    px, py = track_dict[t_id]
-                    vx, vy = icx - px, icy - py
-
-            hh, mask, vest, na = 0.0, 0.0, 0.0, 1.0
             if type_idx == 0:
                 hh, mask, vest = ppe_map.get(t_id, (0.0, 0.0, 0.0))
                 na = 0.0
+            else:
+                hh, mask, vest, na = 0.0, 0.0, 0.0, 1.0
 
-            rows.append([float(t_id), *type_onehot, icx, icy, vx, vy, hh, mask, vest, na])
+            rows.append([float(t_id), *type_onehot, cx, cy, vx, vy, hh, mask, vest, na])
 
     process_subset(moving["person"], 0)
     process_subset(moving["machinery"], 1)

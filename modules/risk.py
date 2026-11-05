@@ -10,7 +10,7 @@ import cv2
 class RiskDetector:
     def __init__(self, yolo_path, stgnn_path, calib_path,
                  winsize=5, std_detng=0.1, std_stgnn=0.1,
-                 graph_rad=250, ruleset=None):
+                 graph_rad=0.25, ruleset=None):
         # The pipeline. quite simple, really.
         self.detector = Detector(yolo_path)
         self.detng = DetNG().compile(get_rules() if ruleset is None else ruleset)
