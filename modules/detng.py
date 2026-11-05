@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class DetNG:
     def __init__(self):
         self.rules = []

@@ -1,5 +1,6 @@
-from modules.risk import RiskDetector
 import cv2
+
+from modules.risk import RiskDetector
 
 # TODO: tune!
 WINSIZE=5

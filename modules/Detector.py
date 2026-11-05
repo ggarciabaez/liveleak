@@ -1,8 +1,9 @@
-﻿from ultralytics import YOLO
-from trackers import OCSORTTracker as Tracker
-import supervision as sv
-import cv2
+﻿import cv2
 import numpy as np
+import supervision as sv
+from trackers import OCSORTTracker as Tracker
+from ultralytics import YOLO
+
 # TODO: add a dict/list of labels in a commonly accessible place
 
 

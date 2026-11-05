@@ -7,7 +7,8 @@ anomaly scores using a calibrator fitted on held-out normal footage.
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
+
 # going against everything i stand for with this one
 
 class MotionAnomalyCalibrator:

@@ -1,10 +1,11 @@
+from collections import deque
+
+from tqdm import tqdm
+
 from modules.Detector import Detector
-from modules.stgnn import STGNN, MotionAnomalyCalibrator, torch, np
 from modules.detng import DetNG, get_rules
 from modules.kfilter import KalmanFilter
-from collections import deque
-from tqdm import tqdm
-import cv2
+from modules.stgnn import STGNN, MotionAnomalyCalibrator, np, torch
 
 
 class RiskDetector:

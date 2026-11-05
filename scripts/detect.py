@@ -1,11 +1,12 @@
 import json
-from pathlib import Path
 from glob import glob
+from pathlib import Path
+
 import cv2
 import numpy as np
 import supervision as sv
+from trackers import ByteTrackTracker, OCSORTTracker
 from ultralytics import YOLO
-from trackers import OCSORTTracker, ByteTrackTracker
 
 # --- Shared Pipeline & Tracker Configuration ---
 PIPELINE_CFG = {

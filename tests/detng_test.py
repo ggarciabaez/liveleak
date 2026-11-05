@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from conftest import CONE, MACHINE, PERSON, VEHICLE
 
 from modules.detng import (
     DetNG,
@@ -11,7 +12,6 @@ from modules.detng import (
     rule_ppe_compliance,
     rule_vectorized_proximity,
 )
-from conftest import CONE, MACHINE, PERSON, VEHICLE
 
 
 def full_mask(frames):
