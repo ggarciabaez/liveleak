@@ -104,32 +104,36 @@ class Detector:
                 return
             type_onehot = [0, 0, 0, 0]
             type_onehot[type_idx] = 1
-            cx = (dets.xyxy[:, 0] + dets.xyxy[:, 2]) / 2
-            cy = (dets.xyxy[:, 1] + dets.xyxy[:, 3]) / 2
+            tracks = {track.tracker_id: (track.state_estimator.kf.state, track.get_state_bbox()) for track in
+                      self.tracker.tracks
+                      if (track.tracker_id >= 0 and track.time_since_update == 0)}
             for i in range(len(dets)):
                 # if untracked, tracker_id is None.
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
 
                 # Untracked items (like cones) get ID -1, tracked must have an ID
+                # if type_idx != 3 and (t_id is None or t_id == -1):
+                #     continue
+                # Tracked classes must have a valid tracker ID; cones (type_idx == 3) use -1
                 if type_idx != 3 and (t_id is None or t_id == -1):
                     continue
+                # TODO: use this for the actual detector
+                if t_id == -1:
+                    cx = cy = vx = vy = 0.0
+                else:
+                    state, (x1, y1, x2, y2) = tracks[t_id]
+                    cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                    vx, vy = np.asarray(state).reshape(-1)[4:6]
+                    current_centroids[t_id] = (cx, cy)
 
-                icx, icy = cx[i], cy[i]
+                if type_idx == 0:
+                    hh, mask, vest = ppe_map.get(t_id, (0.0, 0.0, 0.0))
+                    na = 0.0
+                else:
+                    hh, mask, vest, na = 0.0, 0.0, 0.0, 1.0
 
-                if t_id != -1:
-                    current_centroids[t_id] = (cx[i], cy[i])
-                    if t_id in self.track_dict:
-                        px, py = self.track_dict[t_id]
-                        vx, vy = cx[i] - px, cy[i] - py
 
-                # Default PPE state for non-persons
-                hh, mask, vest, na = 0, 0, 0, 1
-
-                if type_idx == 0:  # Person logic
-                    hh, mask, vest = ppe_map.get(t_id, [0, 0, 0])
-                    na = 0  # NA is 0 for persons as they are eligible for PPE
-
-                vec = [t_id, *type_onehot, icx, icy, vx, vy, hh, mask, vest, na]
+                vec = [float(t_id), *type_onehot, cx, cy, vx, vy, hh, mask, vest, na]
                 final_vectors[type_idx].append(vec)
 
         # 0: Persons, 1: Machinery, 2: Vehicles, 3: Cones

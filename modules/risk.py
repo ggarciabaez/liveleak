@@ -11,7 +11,8 @@ from modules.stgnn import STGNN, MotionAnomalyCalibrator, np, torch
 class RiskDetector:
     def __init__(self, yolo_path, stgnn_path, calib_path,
                  winsize=5, std_detng=0.1, std_stgnn=0.1,
-                 graph_rad=0.25, ruleset=None):
+                 graph_rad=0.25, ruleset=None, nn_only=False,
+                 video_width=1920, video_height=1080):
         # The pipeline. quite simple, really.
         self.detector = Detector(yolo_path)
         self.detng = DetNG().compile(get_rules() if ruleset is None else ruleset)
@@ -31,6 +32,8 @@ class RiskDetector:
         self.sigdet = std_detng
         self.sigstg = std_stgnn
         self.GRID = 32  # i don't even want to begin explaining this.
+        self.C = max(video_width, video_height)
+        self.nno = nn_only
 
     def merge_frame(self, vectors):
         """get_vectors() output: list of 4 (n_c, 13) arrays -> one (n, 13) array.
@@ -90,13 +93,14 @@ class RiskDetector:
             return None, frame
         self.qvec.append(vecs)
         fvecs, mask = self.build_window(self.qvec)
-        print(fvecs.shape, mask.shape)
         ngscore, violations, ruleout = self.detng.execute(fvecs, mask)
 
         with torch.inference_mode():
+            fvecs[:, :, 5:9] /= self.C
             modelscore = self.model.compute_window_error(fvecs, mask)
             calibscore = self.calibrator.score(modelscore.cpu())
-
+        if self.nno:
+            return calibscore, frame
         fused_score, p_cov, k_gain = self.kf.fuse(calibscore, ngscore, self.sigstg, self.sigdet)
 
         if draw:

@@ -7,10 +7,11 @@ import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker, OCSORTTracker
 from ultralytics import YOLO
-
+from torchcodec.decoders import VideoDecoder
+from torch.nn.functional import interpolate
 # --- Shared Pipeline & Tracker Configuration ---
 PIPELINE_CFG = {
-    "model_path": "../assets/ppe_50ep.engine",
+    "model_path": "../assets/ppe_50ep.pt",
     "conf": 0.25,
     "target_fps": 30.0,  # Target effective FPS on Jetson Orin
     "tracker": {
@@ -156,21 +157,13 @@ def extract_frame_rows(
     return np.asarray(rows, dtype=np.float32)
 
 
-def process_video(video_path: str, model: YOLO, out_path: Path, cfg: dict):
-    w, h, src_fps, vid_stride, eff_fps = get_video_props(video_path, cfg["target_fps"])
+def process_dets(results, md, out_path, cfg, video_path):
+    w, h, src_fps, vid_stride, eff_fps = md
     tracker = make_tracker(cfg, eff_fps)
     tracks = {}
 
     frame_chunks = []
     frame_counts = [0]
-
-    results = model(
-        video_path,
-        stream=True,
-        conf=cfg["conf"],
-        vid_stride=vid_stride,
-        verbose=False,
-    )
 
     for result in results:
         dets = sv.Detections.from_ultralytics(result)
@@ -209,14 +202,61 @@ def process_video(video_path: str, model: YOLO, out_path: Path, cfg: dict):
     print(f"Saved {out_path.name}: {metadata['num_frames']} frames, {rows.shape[0]} rows ({w}x{h} @ {eff_fps:.1f} fps)")
 
 
-if __name__ == "__main__":
-    model = YOLO(PIPELINE_CFG["model_path"], task="detect")
+def process_video(video_path: str, model: YOLO, out_path: Path, cfg: dict):
+    w, h, src_fps, vid_stride, eff_fps = get_video_props(video_path, cfg["target_fps"])
+    md = [w, h, src_fps, vid_stride, eff_fps]
+
+    results = model(
+        video_path,
+        stream=True,
+        conf=cfg["conf"],
+        vid_stride=vid_stride,
+        verbose=False,
+    )
+    process_dets(results, md, out_path, cfg, video_path)
+
+
+def process_decoder(video: VideoDecoder, model: YOLO, out_path: Path, cfg: dict):
+    md = video.metadata
+    w, h = md.width, md.height
+    src_fps = md.average_fps
+    vid_stride = max(1, round(src_fps / cfg["target_fps"]))
+    eff_fps = src_fps / vid_stride
+    md = [w, h, src_fps, vid_stride, eff_fps]
+    try:
+        frames = interpolate(video.get_all_frames().data, size=(640, 640), mode='bilinear', align_corners=False)/255.0
+    except Exception as e:
+        print(f"Error processing video: {out_path}")
+        print(f"Error message: {e}")
+        return
+
+    results = [model(frame, conf=cfg["conf"], vid_stride=vid_stride, verbose=False)[0] for frame in frames.unsqueeze(1)]
+    process_dets(results, md, out_path, cfg, "datasets")
+
+
+def from_folder(model, out_dir):
     # videos = ["../data/construction/videos/pexels-akin-victor-10202777-3842x2160-30fps.mp4"]
     videos = glob("../data/construction/videos/*.mp4")
-    out_dir = Path("results")
 
     for idx, v in enumerate(videos):
         process_video(v, model, out_dir / f"{idx:04d}.npz", PIPELINE_CFG)
 
+def from_hf(model, out_dir, start=0):
+    from datasets import load_dataset
+    dataset = load_dataset("Voxel51/Safe_and_Unsafe_Behaviours", split="train", streaming=True)
+    dataset.skip(start)  # [0, 70] is 71 elements soooooo
+    idx = start-1
+    for v in dataset:
+        idx += 1
+        process_decoder(v["video"], model, out_dir / f"{idx}.npz", PIPELINE_CFG)
+
+
+
+if __name__ == '__main__':
+    model = YOLO(PIPELINE_CFG["model_path"], task="detect")
+    out_dir = Path("results2")
+    out_dir.mkdir(exist_ok=True)
+    from_hf(model, out_dir)
+    # from_folder(model, out_dir)
 
 

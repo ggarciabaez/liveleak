@@ -41,10 +41,11 @@ class ContiguousTrajectoryDataset(Dataset):
                 continue
 
             # 1. Normalize coordinates (px, py, vx, vy) in-place at load time
-            rows[:, 5] /= w  # px
-            rows[:, 6] /= h  # py
-            rows[:, 7] /= w  # vx
-            rows[:, 8] /= h  # vy
+            C = max(w, h)
+            rows[:, 5] /= C  # px
+            rows[:, 6] /= C  # py
+            rows[:, 7] /= C  # vx
+            rows[:, 8] /= C  # vy
 
             # 2. Assign scale-independent spatial IDs to cones (where id == -1)
             cone_mask = rows[:, 0] == -1

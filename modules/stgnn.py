@@ -55,7 +55,7 @@ class STGNN(nn.Module):
     KIN_SLICE = slice(5, 9)     # [px, py, vx, vy]
     CONE_COL = 4
 
-    def __init__(self, graph_radius: float, hidden_dim: int = 64):
+    def __init__(self, graph_radius: float = 0.6, hidden_dim: int = 128):
         super().__init__()
         if graph_radius <= 0 or hidden_dim <= 0:
             raise ValueError("graph_radius and hidden_dim must be positive")
