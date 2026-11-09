@@ -112,12 +112,9 @@ class Detector:
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
 
                 # Untracked items (like cones) get ID -1, tracked must have an ID
-                # if type_idx != 3 and (t_id is None or t_id == -1):
-                #     continue
-                # Tracked classes must have a valid tracker ID; cones (type_idx == 3) use -1
-                if type_idx != 3 and (t_id is None or t_id == -1):
+                if type_idx != 3 and (t_id is None or t_id < 0):
                     continue
-                # TODO: use this for the actual detector
+
                 if t_id == -1:
                     cx = cy = vx = vy = 0.0
                 else:

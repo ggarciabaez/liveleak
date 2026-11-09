@@ -65,10 +65,6 @@ def test_compile_returns_self_and_counts_rules():
     assert eng.num_rules == 4
 
 
-@pytest.mark.xfail(
-    raises=ValueError, strict=True,
-    reason="empty-engine path returns a 2-tuple; callers unpack 3 values",
-)
 def test_execute_without_rules_matches_3_tuple_contract():
     frames = np.zeros((1, 1, 13))
     score, _, _ = DetNG().execute(frames, full_mask(frames))
