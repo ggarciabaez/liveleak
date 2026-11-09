@@ -2,11 +2,9 @@
 import inspect
 
 import numpy as np
-import torch
 
 from modules.detng import DetNG, get_rules
 from modules.kfilter import KalmanFilter
-from modules.stgnn import STGNN
 
 
 def test_detng_to_kalman_handoff(history):

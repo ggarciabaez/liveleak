@@ -5,10 +5,11 @@ from pathlib import Path
 import cv2
 import numpy as np
 import supervision as sv
+from torch.nn.functional import interpolate
+from torchcodec.decoders import VideoDecoder
 from trackers import ByteTrackTracker, OCSORTTracker
 from ultralytics import YOLO
-from torchcodec.decoders import VideoDecoder
-from torch.nn.functional import interpolate
+
 # --- Shared Pipeline & Tracker Configuration ---
 PIPELINE_CFG = {
     "model_path": "../assets/ppe_50ep.pt",
