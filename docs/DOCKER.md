@@ -1,34 +1,67 @@
 # Run the inference backend
 
-The default image runs with CPU-only PyTorch. Place these three files in a
-local `models` folder before running the service.
+The backend is a single container serving a WebSocket on port 9160. Model
+files are not in git: on start the container downloads any missing ones from a
+GitHub Release into `./models` and reuses them on later runs.
 
-- `ppe_50ep.pt`, the trained PyTorch YOLO weights with the class order in SSOT
-- `stgnn.pth` on `main` or `stgnn_checkpoint.pth` on `ambar-ml`, the trained motion model for that branch
-- `calib.npz`, the calibration data fitted for that exact checkpoint and detector pipeline
+## Quick start (NVIDIA GPU host)
 
-From the repository root in PowerShell, run:
-
-```powershell
-docker build -t workplace-risk .
-docker run --rm -p 127.0.0.1:9160:9160 --mount "type=bind,source=$((Resolve-Path ./models).Path),target=/models,readonly" workplace-risk
-```
-
-## NVIDIA deployment host
-
-Install a CUDA 13-compatible NVIDIA driver and configure Docker with the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-on the Linux GPU host. Build and run from the repository root:
+Install a CUDA 13-compatible NVIDIA driver and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html),
+then from the repository root:
 
 ```sh
-docker build --build-arg DEVICE=gpu -t workplace-risk:gpu .
-docker run --rm --gpus all -p 127.0.0.1:9160:9160 --mount "type=bind,source=$(pwd)/models,target=/models,readonly" workplace-risk:gpu
+docker compose up --build
 ```
 
-## WebSocket protocol
+Use a different model set with `MODEL_RELEASE_TAG=models-v2 docker compose up`.
 
-The container uses `PPE_MODEL`, `STGNN_CHECKPOINT`, and `STGNN_CALIBRATION`
-to override the default file paths under `/models`.
+## Model files
+
+The container needs three files in `/models` (the `./models` folder):
+
+- `ppe_50ep.pt`, the trained PyTorch YOLO weights with the class order in SSOT
+- `stgnn.pth`, the trained motion model
+- `calib.npz`, the calibration data fitted for that exact checkpoint and detector pipeline
+
+`stgnn.pth` and `calib.npz` are a matched pair, so ship them in the same
+release. One tag is one consistent set.
+
+### Publishing a set
+
+1. On GitHub, create a release with a tag such as `models-v1` (Releases ->
+   Draft a new release). Mark it as a pre-release if you don't want it shown
+   as the project's latest.
+2. Attach the three files as release assets (2 GB limit per file).
+3. Optional: attach a `SHA256SUMS` asset (`sha256sum ppe_50ep.pt stgnn.pth calib.npz > SHA256SUMS`).
+   When present, downloads are verified and a mismatch is deleted and fails the start.
+
+Files already in `./models` are never overwritten, so delete a file to force a
+re-download after changing tags. To skip downloading, put the files in
+`./models` yourself.
+
+| Variable            | Default                           | Purpose                                           |
+|---------------------|-----------------------------------|---------------------------------------------------|
+| `MODEL_RELEASE_TAG` | `models-v1`                       | Release tag to download from                      |
+| `MODEL_REPO`        | `ggarciabaez/liveleak`            | `owner/repo` hosting the release (must be public) |
+| `MODEL_FILES`       | `ppe_50ep.pt,stgnn.pth,calib.npz` | Asset names to fetch                              |
+
+`PPE_MODEL`, `STGNN_CHECKPOINT`, and `STGNN_CALIBRATION` override the paths
+the server loads, as before.
+
+## CPU only (no GPU)
+
+The CPU image uses CPU PyTorch and does not need the toolkit. Compose reserves
+a GPU, so use plain Docker for this:
+
+```sh
+docker build -t workplace-risk:cpu .
+docker run --rm -p 127.0.0.1:9160:9160 -v "$(pwd)/models:/models" workplace-risk:cpu
+```
+
+(PowerShell: use `${PWD}/models` in place of `$(pwd)/models`.)
+
+## WebSocket protocol
 
 Connect to `ws://localhost:9160` and keep one connection open per camera so
 the tracker and motion model can build history. Send one JPEG or PNG per

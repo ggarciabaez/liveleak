@@ -1,11 +1,10 @@
 """WebSocket entry point for streaming frames into the risk detector."""
-
+# TODO: test this and hook to the actual app. Also rename ts, it's not fair.
 import asyncio
 import base64
 import os
 import pickle
 from concurrent.futures import ThreadPoolExecutor
-from inspect import signature
 from pathlib import Path
 
 import cv2
@@ -16,26 +15,18 @@ from websockets.exceptions import ConnectionClosed
 from modules.risk import RiskDetector
 
 
-def make_detector():
-    # main and ambar-ml use different checkpoint and calibration APIs.
-    uses_main_api = "calib_path" in signature(RiskDetector).parameters
-    checkpoint = "stgnn.pth" if uses_main_api else "stgnn_checkpoint.pth"
-    paths = [
-        Path(os.environ.get("PPE_MODEL", "/models/ppe_50ep.pt")),
-        Path(os.environ.get("STGNN_CHECKPOINT", f"/models/{checkpoint}")),
-        Path(os.environ.get("STGNN_CALIBRATION", "/models/calib.npz")),
-    ]
+def make_detector():  # TODO: correct risk detector usage
+    MODEL_DIR = Path(os.environ.get("PPE_MODEL", "/models"))
+    paths = [MODEL_DIR / Path(x) for x in os.environ.get("MODEL_FILES").split(",")]
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(f"Required model file is missing: {path}")
-    if uses_main_api:
-        return RiskDetector(str(paths[0]), paths[1], calib_path=paths[2])
-    return RiskDetector(str(paths[0]), paths[1], calibrator_path=paths[2])
+    return RiskDetector(str(paths[0]), paths[1], paths[2])
 
 
 def infer(detector, message):
     try:
-        encoded = (
+        encoded = (  # TODO: remember this expects a JPEG frame! So Camera->JPG->B64 <--> B64->JPG->Frame
             base64.b64decode(message, validate=True) if isinstance(message, str) else message
         )
         frame = None
@@ -47,7 +38,7 @@ def infer(detector, message):
         return {"error": "Expected a JPEG or PNG frame as binary bytes or base64 text"}
 
     # main returns early on empty frames without updating its diagnostics.
-    detector.results.clear()
+    detector.results.clear()  # TODO: only clear on handshake
     fused_score, _ = detector(frame)
     scores = detector.results.get("scores")
     if scores is None:
@@ -61,7 +52,7 @@ def infer(detector, message):
         "model_score": float(model_score) if model_score is not None else None,
         "rule_score": float(rule_score) if rule_score is not None else None,
         "fused_score": float(fused_score) if fused_score is not None else None,
-        "model_unavailable_reason": reason,
+        "model_unavailable_reason": reason,  # reasons! TODO
     }
 
 

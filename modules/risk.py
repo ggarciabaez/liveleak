@@ -89,7 +89,7 @@ class RiskDetector:
         rvecs = self.detector.get_vectors(dets)
         vecs = self.merge_frame(rvecs)
         if vecs.shape[0] == 0:
-            print("WARNING: no detections")
+            self.results["model_unavailable_reason"] = "no detections"
             return None, frame
         self.qvec.append(vecs)
         fvecs, mask = self.build_window(self.qvec)
@@ -109,6 +109,7 @@ class RiskDetector:
         self.results["kf"] = (p_cov, k_gain)
         self.results["detng"] = (violations, ruleout)
         self.results["detect"] = (dets, vecs)
+        self.results["model_unavailable_reason"] = ""
         return fused_score, frame
 
 class RecursiveRiskDetector:  # TODO

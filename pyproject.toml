@@ -3,7 +3,6 @@ name = "ppe"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "ipykernel>=7.3.0",
     "numpy>=2.5.2",
     "onnx>=1.23.2",
     "onnxruntime-gpu>=1.31.1",
@@ -12,10 +11,11 @@ dependencies = [
     "scipy>=1.18.1",
     "supervision>=0.30.2",
     "torch>=2.14.0",
-    "torch-geometric>=2.8.0.post1",
     "trackers>=2.6.0",
     "ultralytics>=8.4.138",
     "tqdm",
     "wandb>=0.31.0",
     "tensorrt-cu13>=11.4.0.106",
+    "websockets>=17.4",
+    "dotenv>=0.9.9",
 ]

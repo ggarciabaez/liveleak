@@ -220,3 +220,5 @@ assets/
 data/
 sandbox/
 .idea/
+# Model weights (fetched from a GitHub Release, never committed)
+models/

@@ -143,11 +143,11 @@ The DetNG ceiling (~0.632) is a property of the current weights, not a bug in th
 
 `main.py` expects, relative to the working directory:
 
-| File | What | Produced by |
-|---|---|---|
-| `assets/ppe_50ep.engine` | TensorRT YOLO26m engine (needs an NVIDIA GPU) | `sandbox/export_model.py` from `assets/ppe_50ep.pt` (imgsz 640, conf 0.35, iou 0.65, max_det 100, FP16 requested via `quantize=16`) |
-| `assets/stgnn.pth` | `STGNN.state_dict()`, loaded with `weights_only=True` | `STGNN.save_weights` |
-| `assets/calib.npz` | key `errors`: sorted normal forecast errors | `fit_motion_anomaly_calibrator` |
+| File                     | What                                                  | Produced by                                                                                                                         |
+|--------------------------|-------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `assets/ppe_50ep.engine` | TensorRT YOLO26m engine (needs an NVIDIA GPU)         | `sandbox/export_model.py` from `assets/ppe_50ep.pt` (imgsz 640, conf 0.35, iou 0.65, max_det 100, FP16 requested via `quantize=16`) |
+| `../assets/v3/stgnn.pth` | `STGNN.state_dict()`, loaded with `weights_only=True` | `STGNN.save_weights`                                                                                                                |
+| `../assets/v3/calib.npz` | key `errors`: sorted normal forecast errors           | `fit_motion_anomaly_calibrator`                                                                                                     |
 
 `assets/` is in `.gitignore`. `.gitattributes` marks `*.engine`/`*.pt` as Git LFS, but nothing under `assets/` is committed. Where the team's canonical copies live is an open question (§12). The training notebook writes checkpoints to Google Drive (`MyDrive/liveleak/checkpoints/model_v1`).
 

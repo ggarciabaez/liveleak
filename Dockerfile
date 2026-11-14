@@ -31,12 +31,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         gpu) : ;; \
         *) echo "DEVICE must be cpu or gpu" >&2; exit 1 ;; \
     esac \
-    && uv pip install --no-deps \
-        -r /tmp/backend.txt websockets==15.0.1 \
+    && uv pip install --no-deps -r /tmp/backend.txt \
     && uv pip check \
     && rm /tmp/locked.txt /tmp/backend.txt
 
 COPY app/ app/
 COPY modules/ modules/
 EXPOSE 9160
-CMD ["python", "-m", "app.app"]
+# Fetch any missing model files from the GitHub Release, then start the server.
+CMD ["sh", "-c", "python -m app.fetch_models && exec python -m app.backend"]

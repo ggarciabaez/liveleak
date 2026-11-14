@@ -1,0 +1,31 @@
+services:
+  backend:
+    env_file:
+      - path: .env
+        required: false
+    build:
+      context: .
+      args:
+        DEVICE: gpu  # use cpu on machines without an NVIDIA GPU (see docs/DOCKER.md)
+    image: workplace-risk:gpu
+    ports:
+      - "9160:9160"
+    environment:
+      MODEL_RELEASE_TAG: ${MODEL_RELEASE_TAG:-models-v1}
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - ./models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [ gpu ]
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9160), 3).close()" ]
+      interval: 15s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    restart: unless-stopped
