@@ -1,6 +1,6 @@
 # Run the inference backend
 
-The backend is a single container serving a WebSocket on port 9160. Model
+The backend is a single container serving a WebSocket on port 5020. Model
 files are not in git: on start the container downloads any missing ones from a
 GitHub Release into `./models` and reuses them on later runs.
 
@@ -56,14 +56,14 @@ a GPU, so use plain Docker for this:
 
 ```sh
 docker build -t workplace-risk:cpu .
-docker run --rm -p 127.0.0.1:9160:9160 -v "$(pwd)/models:/models" workplace-risk:cpu
+docker run --rm -p 127.0.0.1:5020:5020 -v "$(pwd)/models:/models" workplace-risk:cpu
 ```
 
 (PowerShell: use `${PWD}/models` in place of `$(pwd)/models`.)
 
 ## WebSocket protocol
 
-Connect to `ws://localhost:9160` and keep one connection open per camera so
+Connect to `ws://localhost:5020` and keep one connection open per camera so
 the tracker and motion model can build history. Send one JPEG or PNG per
 message, either as raw binary or as plain base64 text. Each message can be
 up to 16 MiB.

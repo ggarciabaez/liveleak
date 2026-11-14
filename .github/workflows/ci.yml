@@ -30,9 +30,11 @@ jobs:
           uv venv
           uv pip install --index-url https://download.pytorch.org/whl/cpu torch
           uv pip install numpy scipy opencv-python-headless supervision ultralytics trackers \
-            filterpy tqdm pytest pytest-cov
+            filterpy tqdm websockets dotenv pytest pytest-cov mypy
       - name: Unit tests
         run: uv run --no-project pytest --cov=modules --cov-report=term-missing --cov-report=xml
+      - name: Type check
+        run: uv run --no-project mypy backend/backend.py
       - uses: actions/upload-artifact@v4
         with:
           name: coverage

@@ -396,7 +396,7 @@ class LiveMonitorTab(QWidget):
         conn_layout.addWidget(self.user_input, 1, 1, 1, 2)
 
         conn_layout.addWidget(QLabel("WebSocket URI:"), 2, 0)
-        self.uri_input = QLineEdit(self.cfg.get("connection", {}).get("uri", "ws://localhost:9160"))
+        self.uri_input = QLineEdit(self.cfg.get("connection", {}).get("uri", "ws://localhost:5020"))
         conn_layout.addWidget(self.uri_input, 2, 1, 1, 2)
 
         conn_layout.addWidget(QLabel("Video Source:"), 3, 0)

@@ -22,9 +22,6 @@ def main():
         if not ret:
            break
         score, frame = model(frame, draw=True)
-        if score is not None:
-            score = max(score - 0.3, 0)
-        # print("Score:", score)
         if score is None:
             cv2.putText(frame, "No detections", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         else:

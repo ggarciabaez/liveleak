@@ -1,0 +1,37 @@
+sequenceDiagram
+    autonumber
+    actor U as Operator
+    participant App as Desktop App (LiveMonitorTab)
+    participant ST as EventHistoryStore (SQLite)
+    participant W as StreamWorker
+    participant B as Backend (WebSocket :5020)
+    participant RD as RiskDetector
+    U ->> App: Enter user and source, press Start Session
+    App ->> ST: open_session(user_id)
+    ST -->> App: session_id
+    App ->> W: start(uri, source, jpeg_quality)
+    W ->> W: Open OpenCV capture
+    alt Source cannot be opened
+        W -->> App: status error: Failed to open video source
+    else Source opened
+        W ->> B: Connect
+        B ->> RD: Build detector (checks model files exist)
+        loop Each captured frame
+            W ->> B: JPEG bytes
+            alt Not a decodable JPEG or PNG
+                B -->> W: error: Expected a JPEG or PNG frame
+                W -->> App: Show error badge, session continues
+            else Valid frame
+                B ->> RD: detect, track, DetNG rules, ST-GNN score, Kalman fuse
+                RD -->> B: rule, model, fused scores, covariance, reason
+                B -->> W: Pickled result dictionary
+                W -->> App: frame, scores, round-trip time
+                App ->> ST: record_estimate(session, fused, covariance)
+                App -->> U: Overlays with IDs and PPE, risk gauge, status badge
+            end
+        end
+    end
+    U ->> App: Open Retroactive tab
+    App ->> ST: Read-only query by user, date, threshold
+    ST -->> App: Sessions, estimates, daily buckets
+    App -->> U: KPIs, timeline with covariance band, histogram, CSV export

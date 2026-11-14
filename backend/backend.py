@@ -80,7 +80,7 @@ async def handle_connection(websocket):
 
 
 async def main():
-    async with serve(handle_connection, "0.0.0.0", 9160, max_size=16 * 1024 * 1024) as server:
+    async with serve(handle_connection, "0.0.0.0", 5020, max_size=16 * 1024 * 1024) as server:
         await server.serve_forever()
 
 

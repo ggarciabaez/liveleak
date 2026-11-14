@@ -81,14 +81,14 @@ def test_calibrator_rejects_bad_scoring_input(bad):
 def test_calibrator_scores_percentile_of_a_single_error():
     cal = MotionAnomalyCalibrator().fit([1.0, 2.0, 3.0, 4.0])
     assert cal.score(0.0) == 0.0
-    assert cal.score(2.0) == 0.5   # side="right": ties count as <=
+    assert cal.score(2.0) == 0.0
     assert cal.score(10.0) == 1.0
 
 
 def test_calibrator_score_of_many_errors_is_the_max():
     cal = MotionAnomalyCalibrator().fit([1.0, 2.0, 3.0, 4.0])
     assert cal.score([0.0, 2.0, 10.0]) == 1.0
-    assert cal.score([0.0, 2.0]) == 0.5
+    assert cal.score([0.0, 2.0]) == 0.0
     assert isinstance(cal.score([0.0, 2.0]), float)
 
 
@@ -399,10 +399,6 @@ def test_window_error_feeds_the_calibrator(model, win):
     with torch.no_grad():
         err = model.compute_window_error(*win).numpy()
     assert 0.0 <= cal.score(err) <= 1.0
-
-
-# ================= fit_motion_anomaly_calibrator (fully-present sequences) =================
-# TODO: the calibrator now fits during testing such that it's bundled with the model. Testing will be rather unique...
 
 
 # ================= training smoke test =================

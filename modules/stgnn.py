@@ -16,6 +16,7 @@ class MotionAnomalyCalibrator:
 
     def __init__(self):
         self.normal_errors = None
+        self.p0 = 0.95
 
     def fit(self, normal_errors):
         normal_errors = np.asarray(normal_errors, dtype=np.float64).reshape(-1)
@@ -38,8 +39,8 @@ class MotionAnomalyCalibrator:
             raise ValueError("forecast_errors must be finite and non-negative")
 
         ranks = np.searchsorted(self.normal_errors, forecast_errors, side="right")
-        scores = ranks / self.normal_errors.size
-        return float(np.max(scores)) if scores.ndim > 0 else float(scores)
+        p = ranks / self.normal_errors.size
+        return float(np.clip((p - self.p0) / (1 - self.p0), 0, 1).max())
 
     def load(self, calib_file_load):
         if calib_file_load is None:
@@ -87,8 +88,10 @@ class STGNN(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 4),
         )
-        nn.init.zeros_(self.motion_head[-1].weight)
-        nn.init.zeros_(self.motion_head[-1].bias)
+        head_out = self.motion_head[-1]
+        assert isinstance(head_out, nn.Linear)
+        nn.init.zeros_(head_out.weight)
+        nn.init.zeros_(head_out.bias)
 
     def _encode_frames_dense(self, frames: torch.Tensor, frame_mask: torch.Tensor) -> torch.Tensor:
         """

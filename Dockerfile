@@ -37,6 +37,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 COPY backend/ backend/
 COPY modules/ modules/
-EXPOSE 9160
+EXPOSE 5020
 # Fetch any missing model files from the GitHub Release, then start the server.
 CMD ["sh", "-c", "python -m backend.fetch_models && exec python -m backend.backend"]

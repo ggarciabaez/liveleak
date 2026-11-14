@@ -1,39 +1,41 @@
-flowchart TD
-    subgraph SITE["Camera / video source"]
-        CAM["CameraServe: OpenCV capture"]
+flowchart LR
+    SRC["Webcam index or video file"]
+
+    subgraph WS["Workstation: native desktop app (PySide6)"]
+        direction TB
+        LM["LiveMonitorTab: overlays, gauges, strip chart"]
+        SW["StreamWorker (QThread): OpenCV capture, JPEG encode"]
+        RT["RetroactiveDataTab: sessions, histogram, CSV export"]
+        EH["EventHistoryStore: single writer thread"]
+        DB[("SQLite risk.db, WAL")]
+        SW -->|" frame, scores, rtt "| LM
+        LM -->|" record_estimate "| EH
+        EH --> DB
+        RT -->|" read-only queries "| DB
     end
 
-    subgraph SRV["Monitoring Service (one container on the GPU host)"]
-        API["WebSocket API: MonitoringHandler"]
-        AC["AccessControl"]
-        CW["CameraWorker: latest-frame buffer"]
-        YOLO["YOLO26 + ByteTrack"]
-        DES[/"Deterministic Expert System: DetNG"\]
-        STGNN[/"ST-GNN"\]
-        KF{{"Kalman Filter"}}
-        STATE["MonitorState"]
-        REP["Report Service"]
-        EH["EventHistoryStore: single writer"]
-
+    subgraph DK["Docker Compose: backend container (NVIDIA GPU host)"]
+        direction TB
+        WSS["WebSocket server :5020 (backend.py): decode, validate"]
+        RD["RiskDetector"]
+        DET["Detector: YOLO26 + OCSORT, 13-col vectors"]
+        DNG[/"DetNG: 4 safety rules"\]
+        ST[/"ST-GNN + MotionAnomalyCalibrator"\]
+        KF{{"Kalman fusion"}}
+        FM["fetch_models.py: downloads missing weights on start"]
+        WSS --> RD --> DET
+        DET --> DNG
+        DET --> ST
+        DNG -->|" rule score "| KF
+        ST -->|" learned score "| KF
     end
 
-    subgraph WS["Workstation"]
-        APP["Desktop Application: live view and dashboard"]
-      DB[("SQLite risk.db, WAL mode")]
-    end
-
-    CAM -->|"TCP video stream"| CW
-    CW -->|"latest frame"| YOLO
-    YOLO --> DES
-    YOLO --> STGNN
-    DES -->|"rule risk"| KF
-    STGNN -->|"learned risk"| KF
-    KF -->|"risk score, covariance"| CW
-    CW --> STATE
-    CW -->|"estimates, events"| EH
-    EH --> DB
-    REP -->|"read-only queries"| EH
-    APP <-->|"WSOCK: JSON and MJPEG"| API
-    API --> AC
-    API --> STATE
-    API --> REP
+    VOL[/"Bind mount ./models: ppe_50ep.pt, stgnn.pth, calib.npz"/]
+    GHR[("GitHub Release models-v1")]
+    ENVF[/".env: MODEL_REPO, MODEL_RELEASE_TAG, MODELS_DIR, MODEL_FILES"/]
+    SRC --> SW
+    SW <-->|" ws://host:5020: JPEG up, pickled scores down "| WSS
+    GHR -->|" HTTPS "| FM
+    FM --> VOL
+    VOL -.->|" load at connect "| RD
+    ENVF -.-> DK

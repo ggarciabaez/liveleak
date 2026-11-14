@@ -16,8 +16,8 @@ ID_VEHICLE = 9
 
 
 def match_ppe(person_dets: sv.Detections, ppe_dets: sv.Detections) -> dict:
-    ppe_map = {}
-    if len(person_dets) == 0 or len(ppe_dets) == 0:
+    ppe_map: dict = {}
+    if len(person_dets) == 0 or len(ppe_dets) == 0 or person_dets.tracker_id is None or ppe_dets.class_id is None:
         return ppe_map
 
     ppe_cx = (ppe_dets.xyxy[:, 0] + ppe_dets.xyxy[:, 2]) / 2.0
@@ -51,7 +51,7 @@ class Detector:
     def __init__(self, model: str, framerate=30, track_life = 5, **kwargs):
         self.model = YOLO(model, task='detect')
         self.tracker = Tracker(track_life*framerate, framerate, **kwargs)
-        self.track_dict = {}
+        self.track_dict: dict = {}
 
     def __call__(self, frame, **kwargs):
         return sv.Detections.from_ultralytics(self.model.predict(frame, verbose=False, **kwargs)[0])
@@ -96,7 +96,7 @@ class Detector:
 
         ppe_map = match_ppe(moving["person"], static["ppe"])
 
-        final_vectors = [[], [], [], []]
+        final_vectors: list[list] = [[], [], [], []]
         current_centroids = {}
 
         def process_subset(dets: sv.Detections, type_idx: int):

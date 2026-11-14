@@ -1,5 +1,5 @@
 [connection]
-uri = "ws://localhost:9160"
+uri = "ws://localhost:5020"
 source = "0"
 jpeg_quality = 85
 
