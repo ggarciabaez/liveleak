@@ -1,0 +1,6 @@
+# Install after the inference dependencies; CPU setup is described in CI.
+pytest
+pytest-cov
+ruff
+mypy
+websockets==15.0.1
