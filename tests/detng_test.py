@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from conftest import CONE, MACHINE, PERSON, VEHICLE
 
 from modules.detng import (
     DetNG,
@@ -11,17 +12,24 @@ from modules.detng import (
     rule_ppe_compliance,
     rule_vectorized_proximity,
 )
-from tests.conftest import CONE, MACHINE, PERSON, VEHICLE
 
 
-def ctx_for(frame):
-    """Run DetNG's own context builder via a one-rule engine to capture ctx."""
+def full_mask(frames):
+    """(T, N) presence mask with every slot present."""
+    return np.ones(frames.shape[:2], dtype=bool)
+
+
+def ctx_for(frames, mask=None):
+    """Run DetNG's own context builder via a one-rule engine to capture ctx.
+
+    frames: (T, N, 13); mask: (T, N) bool, defaults to all present.
+    """
     captured = {}
 
     def spy(ctx):
         captured["ctx"] = ctx
         return 0.0
-    DetNG().compile([(spy, 1.0)]).execute(np.atleast_3d(frame)[None] if frame.ndim == 2 else frame)
+    DetNG().compile([(spy, 1.0)]).execute(frames, full_mask(frames) if mask is None else mask)
     return captured["ctx"]
 
 
@@ -58,13 +66,14 @@ def test_compile_returns_self_and_counts_rules():
 
 
 def test_execute_without_rules_matches_3_tuple_contract():
-    score, _, _ = DetNG().execute(np.zeros((1, 1, 13)))
+    frames = np.zeros((1, 1, 13))
+    score, _, _ = DetNG().execute(frames, full_mask(frames))
     assert score == 0.0
 
 
 def test_execute_score_bounded_and_names_violations(history):
     eng = DetNG().compile(get_rules())
-    score, violations, scores = eng.execute(history)
+    score, violations, scores = eng.execute(history, full_mask(history))
     assert 0.0 <= score <= 1.0
     assert len(scores) == eng.num_rules
     assert all(isinstance(v, str) for v in violations)
@@ -72,14 +81,39 @@ def test_execute_score_bounded_and_names_violations(history):
 
 def test_execute_empty_scene_is_zero():
     eng = DetNG().compile(get_rules())
-    score, violations, _ = eng.execute(np.empty((3, 0, 13)))
+    score, violations, _ = eng.execute(np.empty((3, 0, 13)), np.zeros((3, 0), dtype=bool))
+    assert score == 0.0 and violations == []
+
+
+def test_execute_all_slots_absent_is_zero(history):
+    eng = DetNG().compile(get_rules())
+    score, violations, _ = eng.execute(history, np.zeros(history.shape[:2], dtype=bool))
     assert score == 0.0 and violations == []
 
 
 def test_higher_weights_never_lower_score(history):
-    lo = DetNG().compile(get_rules((0.1, 0.1, 0.1, 0.1))).execute(history)[0]
-    hi = DetNG().compile(get_rules((1.0, 1.0, 1.0, 1.0))).execute(history)[0]
+    mask = full_mask(history)
+    lo = DetNG().compile(get_rules((0.1, 0.1, 0.1, 0.1))).execute(history, mask)[0]
+    hi = DetNG().compile(get_rules((1.0, 1.0, 1.0, 1.0))).execute(history, mask)[0]
     assert hi >= lo
+
+
+# ---- mask semantics ----
+def test_masked_out_entity_is_ignored(make_frame):
+    f = make_frame((1, PERSON, 0, 0), (2, MACHINE, 1, 0))[None]
+    seen = ctx_for(f, np.array([[True, True]]))
+    hidden = ctx_for(f, np.array([[True, False]]))
+    assert rule_vectorized_proximity(seen) == 1.0
+    assert rule_vectorized_proximity(hidden) == 0.0
+
+
+def test_execute_scores_last_frame_only(history):
+    """Rules read ctx[-1], so presence in earlier frames must not change the score."""
+    eng = DetNG().compile(get_rules())
+    mask = full_mask(history)
+    base = eng.execute(history, mask)[0]
+    mask[:-1, 1] = False  # machine hidden in every frame except the last
+    assert eng.execute(history, mask)[0] == base
 
 
 # ---- individual rules (each takes a ctx list; last frame is evaluated) ----

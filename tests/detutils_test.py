@@ -6,8 +6,7 @@ sv = pytest.importorskip("supervision")
 pytest.importorskip("ultralytics")
 pytest.importorskip("trackers")
 
-from modules.Detector import CLASSES, gyr_gradient, match_ppe
-
+from modules.Detector import CLASSES, gyr_gradient, match_ppe  # noqa: E402 - import after dependency checks
 
 def dets(boxes, classes, ids=None):
     d = sv.Detections(

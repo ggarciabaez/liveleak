@@ -11,7 +11,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: uv run --no-project --with ruff ruff check --isolated tests
+      - run: uv run --no-project --with ruff ruff check --isolated tests --fix  # might be a good idea to lint the whole repo
+        # would introduce some nasty nitpicks though.
 
   test:
     runs-on: ubuntu-latest

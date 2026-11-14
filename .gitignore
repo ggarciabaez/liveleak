@@ -218,3 +218,15 @@ __marimo__/
 .streamlit/secrets.toml
 assets/
 dataset_bundle/local_data/
+data/
+sandbox/
+.idea/
+
+# Local datasets and generated outputs
+dataset/raw/
+dataset/videos/
+dataset/frames/
+dataset/prepared/
+dataset/models/
+evidence/
+tmp/

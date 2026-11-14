@@ -7,8 +7,9 @@ anomaly scores using a calibrator fitted on held-out normal footage.
 
 import numpy as np
 import torch
-import torch.nn as nn
-print("Working on the right one ffs")
+from torch import nn
+
+# going against everything i stand for with this one
 
 class MotionAnomalyCalibrator:
     """Maps forecast RMSE values to empirical percentiles [0, 1] from normal footage."""
@@ -46,23 +47,6 @@ class MotionAnomalyCalibrator:
         calib = np.load(calib_file_load)
         self.normal_errors = calib["errors"]
 
-    def save(self, path):
-        """Save fitted normal-clip errors in the .npz format used by the app."""
-        if self.normal_errors is None:
-            raise RuntimeError("calibrator must be fitted before saving")
-        np.savez(path, errors=self.normal_errors)
-        return self
-
-    def load(self, path):
-        """Load calibration errors saved under the ``errors`` key."""
-        if path is None:
-            return self
-        with np.load(path, allow_pickle=False) as calibration:
-            if "errors" not in calibration:
-                raise ValueError("calibration file must contain an 'errors' array")
-            errors = calibration["errors"]
-        return self.fit(errors)
-
 
 class STGNN(nn.Module):
     # Feature indices for readability
@@ -70,7 +54,8 @@ class STGNN(nn.Module):
     POS_SLICE = slice(5, 7)     # [px, py]
     KIN_SLICE = slice(5, 9)     # [px, py, vx, vy]
     CONE_COL = 4
-    def __init__(self, graph_radius: float, hidden_dim: int = 64):
+
+    def __init__(self, graph_radius: float = 0.6, hidden_dim: int = 128):
         super().__init__()
         if graph_radius <= 0 or hidden_dim <= 0:
             raise ValueError("graph_radius and hidden_dim must be positive")
@@ -102,135 +87,191 @@ class STGNN(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 4),
         )
+        nn.init.zeros_(self.motion_head[-1].weight)
+        nn.init.zeros_(self.motion_head[-1].bias)
 
-    def _encode_frame(self, frame: torch.Tensor, frame_mask: torch.Tensor) -> torch.Tensor:
+    def _encode_frames_dense(self, frames: torch.Tensor, frame_mask: torch.Tensor) -> torch.Tensor:
         """
-        Builds one frame's spatial graph only among active (`frame_mask == True`) entities.
-        frame: (N, 13), frame_mask: (N,)
-        Returns: (N, hidden_dim)
+        Dense batched spatial graph encoding across K frames (where K = B or B * T).
+        frames: (K, N, 13), frame_mask: (K, N)
+        Returns: (K, N, hidden_dim)
         """
-        N = frame.shape[0]
-        device = frame.device
-        out_states = torch.zeros((N, self.hidden_dim), dtype=frame.dtype, device=device)
+        K, N, _ = frames.shape
+        if K == 0 or N == 0:
+            return frames.new_zeros((K, N, self.hidden_dim))
 
-        # Isolate only entities present in this frame
-        valid_idx = frame_mask.nonzero(as_tuple=True)[0]
-        if valid_idx.numel() == 0:
-            return out_states
+        # Sanitize padded inputs so NaNs/Infs in inactive slots don't corrupt gradients via 0 * NaN
+        safe_feats = torch.where(frame_mask.unsqueeze(-1), frames[:, :, self.FEAT_SLICE], 0.0)
+        node_states = self.node_encoder(safe_feats)  # (K, N, H)
 
-        valid_frame = frame[valid_idx]
-        node_states = self.node_encoder(valid_frame[:, self.FEAT_SLICE])
-
-        # If only 1 entity is present, no edges exist; still run spatial_update with zero messages
-        if valid_idx.numel() == 1:
+        if N == 1:
             zero_msg = torch.zeros_like(node_states)
-            out_states[valid_idx] = self.spatial_update(zero_msg, node_states)
-            return out_states
+            updated = self.spatial_update(
+                zero_msg.reshape(K, self.hidden_dim),
+                node_states.reshape(K, self.hidden_dim),
+            ).reshape(K, 1, self.hidden_dim)
+            return torch.where(frame_mask.unsqueeze(-1), updated, 0.0)
 
-        # Find directed edges within graph_radius
-        positions = valid_frame[:, self.POS_SLICE]
-        edges = torch.cdist(positions, positions) <= self.graph_radius
-        edges.fill_diagonal_(False)
-        receivers, senders = edges.nonzero(as_tuple=True)
+        # Build dense (K, N, N) adjacency matrix: adj[k, i, j] == True means edge j -> i
+        positions = torch.where(frame_mask.unsqueeze(-1), frames[:, :, self.POS_SLICE], 0.0)
+        dists = torch.cdist(positions, positions)  # (K, N, N)
 
-        aggregated = torch.zeros_like(node_states)
-        if receivers.numel() > 0:
-            rel_pos = (positions[receivers] - positions[senders]) / self.graph_radius
-            msg_input = torch.cat([node_states[receivers], node_states[senders], rel_pos], dim=-1)
-            messages = self.message_network(msg_input)
+        eye = torch.eye(N, dtype=torch.bool, device=frames.device).unsqueeze(0)
+        valid_pairs = frame_mask.unsqueeze(2) & frame_mask.unsqueeze(1) & ~eye
+        adj = (dists <= self.graph_radius) & valid_pairs  # (K, N, N)
 
-            aggregated.index_add_(0, receivers, messages)
-            counts = torch.bincount(receivers, minlength=valid_frame.shape[0]).clamp_min(1)
-            aggregated = aggregated / counts.unsqueeze(-1)
+        # Pairwise relative positions: receiver (i, dim 1) - sender (j, dim 2)
+        rel_pos = (positions.unsqueeze(2) - positions.unsqueeze(1)) / self.graph_radius  # (K, N, N, 2)
 
-        out_states[valid_idx] = self.spatial_update(aggregated, node_states)
-        return out_states
+        h_rec = node_states.unsqueeze(2).expand(K, N, N, self.hidden_dim)
+        h_send = node_states.unsqueeze(1).expand(K, N, N, self.hidden_dim)
+        msg_input = torch.cat([h_rec, h_send, rel_pos], dim=-1)  # (K, N, N, 2H + 2)
 
-    def _prepare(self, features, mask):
-        """Coerce and validate (T, N, 13) features and the (T, N) presence mask.
+        # Compute messages everywhere, mask out non-edges, and mean-aggregate over senders (dim=2)
+        messages = self.message_network(msg_input)  # (K, N, N, H)
+        messages = messages * adj.unsqueeze(-1).to(messages.dtype)
 
-        Returns (feats, valid, active). `valid` is presence (mask, or inferred from
-        padding id -1); `active` is valid AND not a cone, i.e. the entities that
-        take part in the graph and the temporal state.
+        counts = adj.sum(dim=2, keepdim=True).clamp_min(1).to(messages.dtype)  # (K, N, 1)
+        aggregated = messages.sum(dim=2) / counts  # (K, N, H)
+
+        # Update node states via GRUCell and zero out inactive slots
+        updated = self.spatial_update(
+            aggregated.reshape(K * N, self.hidden_dim),
+            node_states.reshape(K * N, self.hidden_dim),
+        ).reshape(K, N, self.hidden_dim)
+
+        return torch.where(frame_mask.unsqueeze(-1), updated, 0.0)
+
+    def _prepare(self, features, mask, validate: bool = True):
+        """Coerce and validate (T, N, 13) or (B, T, N, 13) features and presence mask.
+
+        Returns (feats, valid, active, was_unbatched) where tensors have batch dim B.
         """
         device = next(self.parameters()).device
         feats = torch.as_tensor(features, dtype=torch.float32, device=device).contiguous()
 
-        if feats.ndim != 3 or feats.shape[-1] != 13:
-            raise ValueError(f"Expected features of shape (T, N, 13), got {tuple(feats.shape)}")
+        was_unbatched = feats.ndim == 3
+        if was_unbatched:
+            feats = feats.unsqueeze(0)
+        elif feats.ndim != 4:
+            raise ValueError(
+                f"Expected features of shape (T, N, 13) or (B, T, N, 13), got {tuple(feats.shape)}"
+            )
 
-        T, N, _ = feats.shape
+        if feats.shape[-1] != 13:
+            raise ValueError(
+                f"Expected last dimension of size 13, got {tuple(feats.shape)}"
+            )
+
+        B, T, N, _ = feats.shape
         if T == 0:
             raise ValueError("features must contain at least one frame")
 
         if mask is None:
             # Infer presence from padding (padded slots have ID == -1)
-            valid = feats[:, :, 0] != -1
+            valid = feats[:, :, :, 0] != -1
         else:
             valid = torch.as_tensor(mask, dtype=torch.bool, device=device).contiguous()
-            if valid.shape != (T, N):
-                raise ValueError(f"mask must have shape (T, N) = {(T, N)}, got {tuple(valid.shape)}")
-        # A slot must hold one track ID in every frame where it is present,
-        # and no two slots may share an ID
-        if N > 0:
-            ids = feats[:, :, 0]
-            hi = ids.masked_fill(~valid, float("-inf")).amax(dim=0)
-            lo = ids.masked_fill(~valid, float("inf")).amin(dim=0)
-            seen = valid.any(dim=0)
+            if was_unbatched and valid.ndim == 2:
+                valid = valid.unsqueeze(0)
+            if valid.shape != (B, T, N):
+                expected = (T, N) if was_unbatched else (B, T, N)
+                actual = tuple(valid.squeeze(0).shape) if was_unbatched and valid.shape[0] == 1 else tuple(valid.shape)
+                raise ValueError(f"mask must have shape {expected}, got {actual}")
+
+        if validate and N > 0 and B > 0:
+            ids = feats[:, :, :, 0]
+            hi = ids.masked_fill(~valid, float("-inf")).amax(dim=1)  # (B, N)
+            lo = ids.masked_fill(~valid, float("inf")).amin(dim=1)   # (B, N)
+            seen = valid.any(dim=1)                                  # (B, N)
+
             if not torch.equal(hi[seen], lo[seen]):
                 raise ValueError("entities must be aligned by track ID across frames")
-            if torch.unique(hi[seen]).numel() != int(seen.sum()):
+
+            # Vectorized uniqueness check across active slots per batch item: sort and check adjacent
+            sorted_hi, _ = torch.where(seen, hi, float("inf")).sort(dim=-1)
+            sorted_seen = torch.isfinite(sorted_hi)
+            dup = (sorted_hi[:, 1:] == sorted_hi[:, :-1]) & sorted_seen[:, 1:] & sorted_seen[:, :-1]
+            if dup.any():
                 raise ValueError("track IDs must be unique across slots")
 
         # Only moving entities participate; cones are static context for DetNG
-        active = valid & ~(feats[:, :, self.CONE_COL] > 0.5)
-        return feats, valid, active
+        active = valid & ~(feats[:, :, :, self.CONE_COL] > 0.5)
+        return feats, valid, active, was_unbatched
 
-
-    def forward(self, features, mask=None):
+    def forward(self, features, mask=None, validate: bool = True):
         """
-        Given a sequence of frames (T, N, 13) and presence mask (T, N),
-        predicts the next step's kinematics (N, 4) from the final frame T-1.
-        Cones are ignored. Rows of slots that are absent at T-1 (or are cones)
-        are meaningless: select with `mask[-1]` and the type column.
+        Given a sequence of frames (T, N, 13) or batch (B, T, N, 13) and optional
+        presence mask (T, N) or (B, T, N), predicts the next step's kinematics
+        (N, 4) or (B, N, 4) from the final frame T-1.
         """
-        feats, _, active = self._prepare(features, mask)
-        T, N, _ = feats.shape
+        feats, _, active, was_unbatched = self._prepare(features, mask, validate=validate)
+        B, T, N, _ = feats.shape
         if N == 0:
-            return feats.new_empty((0, 4))
+            out = feats.new_empty((B, 0, 4))
+            return out.squeeze(0) if was_unbatched else out
 
-        # Step through time: only update an entity's temporal GRU state on frames where it is visible
-        h_temporal = torch.zeros((N, self.hidden_dim), dtype=feats.dtype, device=feats.device)
+        # 1. Encode all (B * T) frames simultaneously in one dense pass
+        spatial_all = self._encode_frames_dense(
+            feats.reshape(B * T, N, 13),
+            active.reshape(B * T, N),
+        ).reshape(B, T, N, self.hidden_dim)
+
+        # 2. Step through T with a dense (B * N) GRU update, masking inactive slots
+        h_temporal = feats.new_zeros((B * N, self.hidden_dim))
         for t in range(T):
-            spatial_emb = self._encode_frame(feats[t], active[t])
-            present = active[t]
-            if present.any():
-                h_temporal[present] = self.temporal_cell(spatial_emb[present], h_temporal[present])
+            present_flat = active[:, t].reshape(B * N, 1)
+            spatial_flat = spatial_all[:, t].reshape(B * N, self.hidden_dim)
+            h_next = self.temporal_cell(spatial_flat, h_temporal)
+            h_temporal = torch.where(present_flat, h_next, h_temporal)
 
-        latest_kinematics = feats[-1, :, self.KIN_SLICE]
+        h_temporal = h_temporal.reshape(B, N, self.hidden_dim)
+        latest_kinematics = feats[:, -1, :, self.KIN_SLICE]
         delta_kinematics = self.motion_head(h_temporal)
-        return latest_kinematics + delta_kinematics
+        pred = latest_kinematics + delta_kinematics
 
-    def compute_window_error(self, features, mask) -> torch.Tensor:
+        return pred.squeeze(0) if was_unbatched else pred
+
+    def compute_window_error(self, features, mask=None, return_mask: bool = False):
         """
-        Uses frames [0 ... T-2] to predict kinematics at frame T-1, and returns
-        the per-entity RMSE for entities visible in both T-2 and T-1.
+        Uses frames [0 ... T-2] to predict kinematics at frame T-1.
+        - If `return_mask=False` (default): returns a 1D tensor of valid entity RMSEs
+          (flattened across B if batched), preserving backward compatibility.
+        - If `return_mask=True`: returns `(rmse, eval_entities)` of shape `(B, N)`
+          (or `(N,)` if unbatched) for per-sample loss reduction without synchronization.
         """
-        feats, _, active = self._prepare(features, mask)
-        T, N, _ = feats.shape
-        empty = feats.new_empty((0,))
+        feats, _, active, was_unbatched = self._prepare(features, mask)
+        B, T, N, _ = feats.shape
+
         if T < 2 or N == 0:
-            return empty
+            if return_mask:
+                empty_err = feats.new_zeros((B, N))
+                empty_mask = torch.zeros((B, N), dtype=torch.bool, device=feats.device)
+                if was_unbatched:
+                    return empty_err.squeeze(0), empty_mask.squeeze(0)
+                return empty_err, empty_mask
+            return feats.new_empty((0,))
 
         # Only evaluate entities present in the last history frame (T-2) AND target frame (T-1)
-        eval_entities = active[-2] & active[-1]
-        if not eval_entities.any():
-            return empty
+        eval_entities = active[:, -2] & active[:, -1]  # (B, N)
 
-        pred_kin = self.forward(feats[:-1], active[:-1])
-        obs_kin = feats[-1, :, self.KIN_SLICE]
+        if not return_mask and not eval_entities.any():
+            return feats.new_empty((0,))
 
-        return torch.sqrt(torch.mean((pred_kin[eval_entities] - obs_kin[eval_entities]) ** 2, dim=-1))
+        # Skip redundant validation inside forward since _prepare already ran
+        pred_kin = self.forward(feats[:, :-1], active[:, :-1], validate=False)
+        obs_kin = feats[:, -1, :, self.KIN_SLICE]
+
+        sq_err = (pred_kin - obs_kin) ** 2
+        rmse = torch.sqrt(torch.mean(sq_err, dim=-1))  # (B, N)
+
+        if return_mask:
+            rmse = torch.where(eval_entities, rmse, 0.0)
+            if was_unbatched:
+                return rmse.squeeze(0), eval_entities.squeeze(0)
+            return rmse, eval_entities
+
+        return rmse[eval_entities]
 
     def predict_kinematics(self, feature_history):
         """Predict next-step [px, py, vx, vy] values as a NumPy array."""
@@ -252,134 +293,29 @@ class STGNN(nn.Module):
         self.load_state_dict(torch.load(path, weights_only=True))
 
 
-def _prepare_feature_sequences(feature_sequences, window_size, name):
-    if isinstance(feature_sequences, (np.ndarray, torch.Tensor)):
-        if feature_sequences.ndim == 3:
-            sequences = [feature_sequences]
-        elif feature_sequences.ndim == 4:
-            sequences = list(feature_sequences)
-        else:
-            raise ValueError(f"{name} must contain sequences shaped (F, N, 13)")
-    else:
-        sequences = list(feature_sequences)
+def collate(batch):
+    xs, vs = [], []
+    for f, v in batch:                               # f: (W,N,13), v: (W,N)
+        cone = ((f[..., 4] > 0.5) & v).any(0)        # slots that are cones
+        xs.append(f[:, ~cone]); vs.append(v[:, ~cone])
+    N = max(x.shape[1] for x in xs)
+    X = torch.zeros(len(xs), xs[0].shape[0], N, 13); X[..., 0] = -1
+    V = torch.zeros(len(xs), xs[0].shape[0], N, dtype=torch.bool)
+    for i, (x, v) in enumerate(zip(xs, vs)):
+        X[i, :, :x.shape[1]] = x; V[i, :, :x.shape[1]] = v
+    return X, V
 
-    if not sequences:
-        raise ValueError(f"{name} must contain at least one sequence")
+@torch.no_grad()
+def fit_calibrator(model, loader, device, path="calib.npz"):
+    model.eval(); worst = []
+    for X, V in loader:                              # held-out *normal* videos only
+        rmse, ev = model.compute_window_error(X.to(device), V.to(device), return_mask=True)
+        has = ev.any(1)
+        worst.append(rmse.amax(1)[has].cpu())        # rmse is 0 where not evaluated
+    cal = MotionAnomalyCalibrator().fit(torch.cat(worst).numpy())
+    np.savez(path, errors=cal.normal_errors)
+    return cal
 
-    prepared_sequences = []
-    for sequence_index, sequence in enumerate(sequences):
-        sequence = torch.as_tensor(sequence, dtype=torch.float32).detach().cpu()
-        if sequence.ndim != 3 or sequence.shape[-1] != 13:
-            raise ValueError(f"{name}[{sequence_index}] must have shape (F, N, 13)")
-        if sequence.shape[0] <= window_size:
-            raise ValueError(
-                f"{name}[{sequence_index}] needs more frames than window_size"
-            )
-        if sequence.shape[1] == 0:
-            raise ValueError(f"{name}[{sequence_index}] must contain entities")
-        if not torch.isfinite(sequence).all():
-            raise ValueError(f"{name}[{sequence_index}] must contain finite values")
-
-        track_ids = sequence[:, :, 0]
-        if not torch.equal(track_ids, track_ids[0:1, :].expand_as(track_ids)):
-            raise ValueError(
-                f"{name}[{sequence_index}] must keep each track in the same row"
-            )
-        if any(torch.unique(frame_ids).numel() != sequence.shape[1] for frame_ids in track_ids):
-            raise ValueError(
-                f"{name}[{sequence_index}] needs unique track IDs in every frame"
-            )
-        prepared_sequences.append(sequence)
-
-    return prepared_sequences
-
-
-def _prepare_feature_sequences(feature_sequences, window_size, name):
-    """Validate and normalize input clips for training/calibration helpers."""
-    if isinstance(feature_sequences, (np.ndarray, torch.Tensor)):
-        if feature_sequences.ndim == 3:
-            sequences = [feature_sequences]
-        elif feature_sequences.ndim == 4:
-            sequences = list(feature_sequences)
-        else:
-            raise ValueError(f"{name} must contain sequences shaped (F, N, 13)")
-    else:
-        sequences = list(feature_sequences)
-
-    if not sequences:
-        raise ValueError(f"{name} must contain at least one sequence")
-
-    prepared = []
-    for sequence_index, sequence in enumerate(sequences):
-        sequence = torch.as_tensor(sequence, dtype=torch.float32).detach().cpu()
-        if sequence.ndim != 3 or sequence.shape[-1] != 13:
-            raise ValueError(f"{name}[{sequence_index}] must have shape (F, N, 13)")
-        if sequence.shape[0] <= window_size:
-            raise ValueError(f"{name}[{sequence_index}] needs more frames than window_size")
-        if sequence.shape[1] == 0:
-            raise ValueError(f"{name}[{sequence_index}] must contain entities")
-        if not torch.isfinite(sequence).all():
-            raise ValueError(f"{name}[{sequence_index}] must contain finite values")
-        track_ids = sequence[:, :, 0]
-        if not torch.equal(track_ids, track_ids[0:1, :].expand_as(track_ids)):
-            raise ValueError(f"{name}[{sequence_index}] must keep tracks in the same row")
-        if any(torch.unique(frame_ids).numel() != sequence.shape[1] for frame_ids in track_ids):
-            raise ValueError(f"{name}[{sequence_index}] needs unique track IDs per frame")
-        prepared.append(sequence)
-    return prepared
-
-
-# Keep calibration explicit: it requires held-out normal sequences and should
-# run after training, rather than being hidden inside a model decorator.
-def fit_motion_anomaly_calibrator(
-    model,
-    normal_sequences,
-    window_size=8,
-    calibrator=None,
-    calib_file_save="./calib.npz"
-):
-    """Fit a score calibrator from one-step errors on held-out normal clips."""
-    if window_size <= 0:
-        raise ValueError("window_size must be positive")
-
-    sequences = _prepare_feature_sequences(
-        normal_sequences,
-        window_size,
-        "normal_sequences",
-    )
-
-
-    model_device = next(model.parameters()).device
-    was_training = model.training
-    normal_errors = []
-    model.eval()
-
-    try:
-        with torch.inference_mode():
-            for sequence in sequences:
-                for start in range(sequence.shape[0] - window_size):
-                    feature_history = sequence[start : start + window_size].to(
-                        model_device
-                    )
-                    observed = sequence[start + window_size, :, 5:9].to(
-                        model_device
-                    )
-                    prediction = model(feature_history)
-                    entity_errors = torch.sqrt(
-                        torch.mean(torch.square(prediction - observed), dim=1)
-                    )
-                    normal_errors.append(entity_errors.cpu().numpy())
-    finally:
-        model.train(was_training)
-
-    if calibrator is None:
-        calibrator = MotionAnomalyCalibrator()
-
-    calibrator = calibrator.fit(np.concatenate(normal_errors))
-    if calib_file_save is not None:
-        np.savez(calib_file_save, errors=calibrator.normal_errors)
-
-    return calibrator
 
 if __name__ == '__main__':
     calib = MotionAnomalyCalibrator()
