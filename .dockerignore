@@ -1,7 +1,7 @@
 **
 !pyproject.toml
 !uv.lock
-!app/
-!app/*.py
+!backend/
+!backend/*.py
 !modules/
 !modules/*.py

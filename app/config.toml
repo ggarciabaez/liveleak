@@ -1,0 +1,13 @@
+[connection]
+uri = "ws://localhost:9160"
+source = "0"
+jpeg_quality = 85
+
+[session]
+default_user = "operator_01"
+db_path = "risk.db"
+
+[telemetry]
+ema_alpha = 0.22
+risk_threshold = 0.65
+history_seconds = 15.0

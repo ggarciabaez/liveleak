@@ -6,7 +6,7 @@ ENV UV_LINK_MODE=copy \
     UV_HTTP_TIMEOUT=120 \
     UV_CONCURRENT_DOWNLOADS=3 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH" \
+    PATH="/backend/.venv/bin:$PATH" \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv /uv /bin/uv
-WORKDIR /app
+WORKDIR /backend
 COPY pyproject.toml uv.lock ./
 ARG DEVICE=cpu
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -35,8 +35,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && uv pip check \
     && rm /tmp/locked.txt /tmp/backend.txt
 
-COPY app/ app/
+COPY backend/ backend/
 COPY modules/ modules/
 EXPOSE 9160
 # Fetch any missing model files from the GitHub Release, then start the server.
-CMD ["sh", "-c", "python -m app.fetch_models && exec python -m app.backend"]
+CMD ["sh", "-c", "python -m backend.fetch_models && exec python -m backend.backend"]

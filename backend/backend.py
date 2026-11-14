@@ -9,14 +9,16 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from dotenv import load_dotenv
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
 from modules.risk import RiskDetector
 
+load_dotenv()
 
 def make_detector():  # TODO: correct risk detector usage
-    MODEL_DIR = Path(os.environ.get("PPE_MODEL", "/models"))
+    MODEL_DIR = Path(os.environ.get("MODELS_DIR", "/models"))
     paths = [MODEL_DIR / Path(x) for x in os.environ.get("MODEL_FILES").split(",")]
     for path in paths:
         if not path.is_file():
@@ -48,10 +50,18 @@ def infer(detector, message):
         rule_score = scores[1]
         model_score = scores[2] if len(scores) == 3 else scores[0]
         reason = detector.results.get("model_unavailable_reason")
+    kf_res = detector.results.get("kf")  # (x, P, K) tuple from KalmanFilter.fuse
+    detng_res = detector.results.get("detng")  # (total_risk, violations, scores) from DetNG.execute
+    detect_res = detector.results.get("detect")
     return {
         "model_score": float(model_score) if model_score is not None else None,
         "rule_score": float(rule_score) if rule_score is not None else None,
         "fused_score": float(fused_score) if fused_score is not None else None,
+        "results": {
+            "kf": [float(v) for v in kf_res] if kf_res is not None else None,
+            "detng": detng_res,
+            "detect": detect_res,
+        },
         "model_unavailable_reason": reason,  # reasons! TODO
     }
 
