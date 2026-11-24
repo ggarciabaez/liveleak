@@ -15,12 +15,16 @@ dependencies = [
     "ultralytics>=8.4.138",
     "tqdm",
     "wandb>=0.31.0",
-    "tensorrt-cu13>=11.4.0.106",
+    "tensorrt-cu13==11.4.0.106", # Compatability issues might pop up here. TODO
     "websockets>=17.4",
     "dotenv>=0.9.9",
     "mypy>=2.4.1",
     "pyside6>=6.12.0",
     "pyqtgraph>=0.14.0",
+    "pyotp>=2.12.1",
+    "qrcode>=8.2",
+    "google-auth-oauthlib>=1.5.0",
+    "google-api-python-client>=2.202.0",
 ]
 [tool.mypy]
 ignore_missing_imports = true

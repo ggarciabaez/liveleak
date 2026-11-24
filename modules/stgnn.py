@@ -17,6 +17,7 @@ class MotionAnomalyCalibrator:
     def __init__(self):
         self.normal_errors = None
         self.p0 = 0.95
+        self.pd = 0.0
 
     def fit(self, normal_errors):
         normal_errors = np.asarray(normal_errors, dtype=np.float64).reshape(-1)
@@ -40,7 +41,9 @@ class MotionAnomalyCalibrator:
 
         ranks = np.searchsorted(self.normal_errors, forecast_errors, side="right")
         p = ranks / self.normal_errors.size
-        return float(np.clip((p - self.p0) / (1 - self.p0), 0, 1).max())
+        p = float(np.clip((p - self.p0) / (1 - self.p0), 0, 1).max())
+        self.pd = np.clip(0.95 * self.pd + 0.05 * p, 0, 1)
+        return self.pd
 
     def load(self, calib_file_load):
         if calib_file_load is None:

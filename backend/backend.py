@@ -1,5 +1,4 @@
 """WebSocket entry point for streaming frames into the risk detector."""
-# TODO: test this and hook to the actual app. Also rename ts, it's not fair.
 import asyncio
 import base64
 import os

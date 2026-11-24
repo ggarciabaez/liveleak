@@ -1,7 +1,7 @@
 ﻿import cv2
 import numpy as np
 import supervision as sv
-from trackers import OCSORTTracker as Tracker
+from trackers import ByteTrackTracker as Tracker
 from ultralytics import YOLO
 
 # TODO: add a dict/list of labels in a commonly accessible place
@@ -105,8 +105,8 @@ class Detector:
             type_onehot = [0, 0, 0, 0]
             type_onehot[type_idx] = 1
             tracks = {track.tracker_id: (track.state_estimator.kf.state, track.get_state_bbox()) for track in
-                      self.tracker.tracks
-                      if (track.tracker_id >= 0 and track.time_since_update == 0)}
+                      self.tracker.tracks}
+            # if (track.tracker_id >= 0 and track.time_since_update == 0)}
             for i in range(len(dets)):
                 # if untracked, tracker_id is None.
                 t_id = dets.tracker_id[i] if dets.tracker_id is not None else -1
@@ -121,6 +121,9 @@ class Detector:
                     state, (x1, y1, x2, y2) = tracks[t_id]
                     cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
                     vx, vy = np.asarray(state).reshape(-1)[4:6]
+                    A = (x2 - x1) * (y2 - y1)
+                    vx /= A  # box width
+                    vy /= A  # box height
                     current_centroids[t_id] = (cx, cy)
 
                 if type_idx == 0:

@@ -11,3 +11,6 @@ db_path = "risk.db"
 ema_alpha = 0.22
 risk_threshold = 0.65
 history_seconds = 15.0
+
+[auth]
+oauth_secret_path = "oauth_secret.json"

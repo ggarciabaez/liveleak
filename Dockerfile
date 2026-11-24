@@ -18,7 +18,7 @@ WORKDIR /backend
 COPY pyproject.toml uv.lock ./
 ARG DEVICE=cpu
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv export --locked --no-dev --no-emit-project --no-hashes --output-file /tmp/locked.txt \
+    uv export --no-dev --no-emit-project --no-hashes --output-file /tmp/locked.txt \
     && sed '/^tensorrt[=-]/d' /tmp/locked.txt > /tmp/backend.txt \
     && uv venv \
     && case "$DEVICE" in \

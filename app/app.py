@@ -42,7 +42,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.db import EventHistoryStore, SessionSummary
+from app.auth import GoogleOAuthWorker, UserProfilePill, run_interactive_login
+from app.db import EventHistoryStore, SessionSummary, UserRecord
 from app.worker import StreamWorker
 
 # Configure PyQtGraph global aesthetics
@@ -391,8 +392,10 @@ class LiveMonitorTab(QWidget):
         conn_title.setObjectName("CardTitle")
         conn_layout.addWidget(conn_title, 0, 0, 1, 3)
 
-        conn_layout.addWidget(QLabel("Operator ID:"), 1, 0)
-        self.user_input = QLineEdit(self.cfg.get("session", {}).get("default_user", "operator_01"))
+        conn_layout.addWidget(QLabel("Operator:"), 1, 0)
+        self.user_input = QLineEdit("Not signed in (Guest)")
+        self.user_input.setReadOnly(True)
+        self.active_user: UserRecord | None = None
         conn_layout.addWidget(self.user_input, 1, 1, 1, 2)
 
         conn_layout.addWidget(QLabel("WebSocket URI:"), 2, 0)
@@ -579,6 +582,14 @@ class LiveMonitorTab(QWidget):
 
         root_layout.addLayout(right_col, stretch=32)
 
+    def set_active_user(self, user: UserRecord | None) -> None:
+        self.active_user = user
+        if user is not None:
+            label = f"{user.name} ({user.email})" if user.email else (user.name or user.id)
+            self.user_input.setText(label)
+        else:
+            self.user_input.setText("Not signed in (Guest)")
+
     @Slot(int)
     def _on_alpha_changed(self, value: int) -> None:
         self.ema_alpha = value / 100.0
@@ -612,7 +623,11 @@ class LiveMonitorTab(QWidget):
         self.rule_buf.clear()
 
         # Open a new SQLite session in EventHistoryStore
-        user_id = self.user_input.text().strip() or "operator_01"
+        if self.active_user is None:
+            QMessageBox.warning(self, "Not signed in", "Please sign in to start a session.")
+            return
+
+        user_id = self.active_user.id
         self.active_session_id = self.store.open_session(user_id)
         self.session_lbl.setText(f"Session: {self.active_session_id}")
 
@@ -950,16 +965,20 @@ class RetroactiveDataTab(QWidget):
     @Slot()
     def refresh_data(self) -> None:
         # Populate User dropdown while preserving selection
-        curr_user = self.user_combo.currentText()
-        users = ["All Users"] + self.store.list_users()
+        curr_user_id = self.user_combo.currentData()
+        users = self.store.list_users()
         self.user_combo.blockSignals(True)
         self.user_combo.clear()
-        self.user_combo.addItems(users)
-        if curr_user in users:
-            self.user_combo.setCurrentText(curr_user)
+        self.user_combo.addItem("All Users", "All Users")
+        for u in users:
+            display = f"{u.name} ({u.email})" if u.name and u.email else (u.name or u.id)
+            self.user_combo.addItem(display, u.id)
+        idx = self.user_combo.findData(curr_user_id)
+        if idx >= 0:
+            self.user_combo.setCurrentIndex(idx)
         self.user_combo.blockSignals(False)
 
-        user_filter = self.user_combo.currentText()
+        user_filter = self.user_combo.currentData() or "All Users"
         s_date = self.start_date.date().toString("yyyy-MM-dd")
         e_date = self.end_date.date().toString("yyyy-MM-dd")
 
@@ -1002,7 +1021,7 @@ class RetroactiveDataTab(QWidget):
         self._update_details()
 
     def _update_details(self) -> None:
-        user_filter = self.user_combo.currentText()
+        user_filter = self.user_combo.currentData() or "All Users"
         s_date = self.start_date.date().toString("yyyy-MM-dd")
         e_date = self.end_date.date().toString("yyyy-MM-dd")
         thresh = self.thresh_spin.value()
@@ -1079,7 +1098,7 @@ class RetroactiveDataTab(QWidget):
             return
 
         rows = self.store.get_filtered_estimates(
-            user_id=self.user_combo.currentText(),
+            user_id=self.user_combo.currentData() or "All Users",
             start_date=self.start_date.date().toString("yyyy-MM-dd"),
             end_date=self.end_date.date().toString("yyyy-MM-dd"),
             session_id=self.selected_session_id,
@@ -1106,6 +1125,8 @@ class LiveLeakDesktopApp(QMainWindow):
         self.cfg = self._load_config(config_path)
         db_path = self.cfg.get("session", {}).get("db_path", "risk.db")
         self.store = EventHistoryStore(db_path)
+        self.current_user: UserRecord | None = None
+        self._oauth_worker: GoogleOAuthWorker | None = None
 
         self.setWindowTitle("Workplace Risk Detection — Live Monitor & Retroactive Telemetry")
         self.resize(1480, 880)
@@ -1118,7 +1139,57 @@ class LiveLeakDesktopApp(QMainWindow):
         self.tabs.addTab(self.data_tab, "▤  Retroactive Data & DB Analytics")
         self.tabs.currentChanged.connect(self._on_tab_switched)
 
+        # User profile pill in the top-right corner of the tab bar
+        self.user_pill = UserProfilePill()
+        self.user_pill.login_requested.connect(self._start_login_flow)
+        self.user_pill.logout_requested.connect(self._logout)
+        self.tabs.setCornerWidget(self.user_pill, Qt.Corner.TopRightCorner)
+
         self.setCentralWidget(self.tabs)
+
+    @Slot()
+    def _start_login_flow(self) -> None:
+        if self._oauth_worker is not None and self._oauth_worker.isRunning():
+            return
+
+        secret_path = Path(self.cfg.get("auth", {}).get("oauth_secret_path", "oauth_secret.json"))
+        self.user_pill.set_loading("Waiting for Google…")
+
+        self._oauth_worker = GoogleOAuthWorker(secret_path)
+        self._oauth_worker.succeeded.connect(self._on_oauth_succeeded)
+        self._oauth_worker.failed.connect(self._on_oauth_failed)
+        self._oauth_worker.start()
+
+    @Slot(dict)
+    def _on_oauth_succeeded(self, profile: dict) -> None:
+        self.user_pill.setEnabled(True)
+        authed_user = run_interactive_login(self.store, profile, parent=self)
+        if authed_user is not None:
+            self.current_user = authed_user
+            self.user_pill.set_user(authed_user)
+            self.live_tab.set_active_user(authed_user)
+            self.data_tab.refresh_data()
+        else:
+            # Restore previous pill state if user cancelled OTP verification
+            if self.current_user is not None:
+                self.user_pill.set_user(self.current_user)
+            else:
+                self.user_pill.set_logged_out()
+
+    @Slot(str)
+    def _on_oauth_failed(self, err_msg: str) -> None:
+        self.user_pill.setEnabled(True)
+        if self.current_user is not None:
+            self.user_pill.set_user(self.current_user)
+        else:
+            self.user_pill.set_logged_out()
+        QMessageBox.critical(self, "Google Sign-In Failed", f"Could not complete OAuth sign-in:\n{err_msg}")
+
+    @Slot()
+    def _logout(self) -> None:
+        self.current_user = None
+        self.user_pill.set_logged_out()
+        self.live_tab.set_active_user(None)
 
     @staticmethod
     def _load_config(path: Path) -> dict:

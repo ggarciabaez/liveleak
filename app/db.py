@@ -1,4 +1,4 @@
-"""SQLite EventHistoryStore adhering strictly to the 3-table ERD (USER, SESSION, RISK_ESTIMATE)."""
+"""SQLite EventHistoryStore adhering to the 3-table ERD (USERS, SESSION, RISK_ESTIMATE)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class UserRecord:
+    id: str
+    email: str | None = None
+    name: str | None = None
+    picture: str | None = None
+    otp: str | None = None  # Base32 TOTP secret once enrolled, None if not yet enrolled
 
 
 @dataclass(frozen=True)
@@ -31,7 +40,7 @@ class RiskEstimateRow:
 
 
 class EventHistoryStore:
-    """Single-writer, multi-reader SQLite store for retroactive risk analysis."""
+    """Single-writer, multi-reader SQLite store for retroactive risk analysis & auth."""
 
     def __init__(self, db_path: str | Path = "risk.db") -> None:
         self.db_path = Path(db_path)
@@ -48,20 +57,34 @@ class EventHistoryStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    def _get_write_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA foreign_keys=ON;")
+        conn.row_factory = sqlite3.Row
+        return conn
+
     def _init_schema(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("PRAGMA journal_mode=WAL;")
-            conn.execute("PRAGMA synchronous=NORMAL;")
-            conn.execute("PRAGMA foreign_keys=ON;")
+        with self._get_write_conn() as conn:
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS USER
+                CREATE TABLE IF NOT EXISTS USERS
                 (
-                    UserID
+                    id
                     TEXT
                     PRIMARY
-                    KEY
+                    KEY,
+                    email
+                    TEXT
+                    UNIQUE,
+                    name
+                    TEXT,
+                    picture
+                    TEXT,
+                    otp
+                    TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS SESSION
@@ -82,9 +105,9 @@ class EventHistoryStore:
                     KEY
                 (
                     UserID
-                ) REFERENCES USER
+                ) REFERENCES USERS
                 (
-                    UserID
+                    id
                 )
                     );
 
@@ -121,17 +144,15 @@ class EventHistoryStore:
                 )
                     );
 
+                CREATE INDEX IF NOT EXISTS idx_users_email ON USERS (email);
                 CREATE INDEX IF NOT EXISTS idx_session_date ON SESSION (Date);
                 CREATE INDEX IF NOT EXISTS idx_session_user ON SESSION (UserID);
-                CREATE INDEX IF NOT EXISTS idx_estimate_score ON RISK_ESTIMATE(Score);
+                CREATE INDEX IF NOT EXISTS idx_estimate_score ON RISK_ESTIMATE (Score);
                 """
             )
 
     def _writer_loop(self) -> None:
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("PRAGMA foreign_keys=ON;")
+        conn = self._get_write_conn()
 
         batch: list[tuple] = []
         while not self._stop_event.is_set() or not self._write_queue.empty():
@@ -140,7 +161,6 @@ class EventHistoryStore:
                 if item is None:
                     break
                 batch.append(item)
-                # Drain any immediately available items up to 128
                 while len(batch) < 128:
                     try:
                         nxt = self._write_queue.get_nowait()
@@ -161,7 +181,7 @@ class EventHistoryStore:
                             if kind == "OPEN_SESSION":
                                 _, user_id, session_id, dt_str = op
                                 conn.execute(
-                                    "INSERT OR IGNORE INTO USER (UserID) VALUES (?)",
+                                    "INSERT OR IGNORE INTO USERS (id) VALUES (?)",
                                     (user_id,),
                                 )
                                 conn.execute(
@@ -181,6 +201,46 @@ class EventHistoryStore:
                     batch.clear()
 
         conn.close()
+
+    # ── User & Auth Management ────────────────────────────────────────────
+
+    def upsert_user_profile(
+            self, user_id: str, email: str | None, name: str | None, picture: str | None
+    ) -> UserRecord:
+        """Create or update profile fields without overwriting an existing OTP secret."""
+        with self._get_write_conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO USERS (id, email, name, picture, otp)
+                VALUES (?, ?, ?, ?, NULL) ON CONFLICT(id) DO
+                UPDATE SET
+                    email = COALESCE (excluded.email, USERS.email),
+                    name = COALESCE (excluded.name, USERS.name),
+                    picture = COALESCE (excluded.picture, USERS.picture)
+                """,
+                (user_id, email, name, picture),
+            )
+            row = conn.execute(
+                "SELECT id, email, name, picture, otp FROM USERS WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            return UserRecord(**dict(row))
+
+    def get_user_by_id(self, user_id: str) -> UserRecord | None:
+        if not self.db_path.exists():
+            return None
+        with self._get_read_conn() as conn:
+            row = conn.execute(
+                "SELECT id, email, name, picture, otp FROM USERS WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            return UserRecord(**dict(row)) if row else None
+
+    def set_user_otp_secret(self, user_id: str, secret: str | None) -> None:
+        with self._get_write_conn() as conn:
+            conn.execute("UPDATE USERS SET otp = ? WHERE id = ?", (secret, user_id))
+
+    # ── Telemetry Session & Estimate Persistence ──────────────────────────
 
     def open_session(self, user_id: str) -> str:
         """Create a new session for `user_id` and enqueue it for persistence."""
@@ -205,12 +265,14 @@ class EventHistoryStore:
 
     # ── Read-Only Analytical Queries for DataTab ──────────────────────────
 
-    def list_users(self) -> list[str]:
+    def list_users(self) -> list[UserRecord]:
         if not self.db_path.exists():
             return []
         with self._get_read_conn() as conn:
-            rows = conn.execute("SELECT UserID FROM USER ORDER BY UserID").fetchall()
-            return [r["UserID"] for r in rows]
+            rows = conn.execute(
+                "SELECT id, email, name, picture, otp FROM USERS ORDER BY COALESCE(name, id)"
+            ).fetchall()
+            return [UserRecord(**dict(r)) for r in rows]
 
     def query_sessions(
             self,
@@ -231,7 +293,7 @@ class EventHistoryStore:
                      COALESCE(AVG(r.Covariance), 0.0) AS mean_cov
               FROM SESSION s
                        LEFT JOIN RISK_ESTIMATE r ON s.SessionID = r.SessionID
-              WHERE 1 = 1 \
+              WHERE 1 = 1
               """
         params: list[object] = []
         if user_id and user_id != "All Users":
@@ -300,7 +362,7 @@ class EventHistoryStore:
               SELECT r.SessionID, r.Timestamp, r.Score, r.Covariance
               FROM RISK_ESTIMATE r
                        JOIN SESSION s ON r.SessionID = s.SessionID
-              WHERE r.Score >= ? \
+              WHERE r.Score >= ?
               """
         params: list[object] = [min_score]
         if session_id:
@@ -338,7 +400,6 @@ class EventHistoryStore:
             start_date: str | None = None,
             end_date: str | None = None,
     ) -> list[tuple[str, int]]:
-        """mirrors ReportAggregator.bucket_by_day: count estimates >= threshold per day."""
         if not self.db_path.exists():
             return []
 
@@ -348,7 +409,7 @@ class EventHistoryStore:
               FROM SESSION s
                   LEFT JOIN RISK_ESTIMATE r
               ON s.SessionID = r.SessionID
-              WHERE 1=1 \
+              WHERE 1=1
               """
         params: list[object] = [threshold]
         if user_id and user_id != "All Users":
